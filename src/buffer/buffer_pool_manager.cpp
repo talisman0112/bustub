@@ -33,82 +33,118 @@ BufferPoolManager::BufferPoolManager(size_t pool_size, DiskManager *disk_manager
 BufferPoolManager::~BufferPoolManager() { delete[] pages_; }
 
 auto BufferPoolManager::NewPage(page_id_t *page_id) -> Page * {
-  std::scoped_lock<std::mutex> lock(latch_);
   frame_id_t frame_id;
-  if (!free_list_.empty()) {
-    frame_id = free_list_.front();
-    free_list_.pop_front();
-  } else {
-    if (!replacer_->Evict(&frame_id)) {
-      return nullptr;
+  Page *victim = nullptr;
+  bool need_flush = false;
+  page_id_t old_pid = INVALID_PAGE_ID;
+  // === 第一段：持锁找 frame ===
+  {
+    std::scoped_lock<std::mutex> lock(latch_);
+    if (!free_list_.empty()) {
+      frame_id = free_list_.front();
+      free_list_.pop_front();
+    } else {
+      if (!replacer_->Evict(&frame_id)) {
+        return nullptr;
+      }
+      victim = &pages_[frame_id];
+      old_pid = victim->GetPageId();
+      need_flush = victim->IsDirty();
+      page_table_.erase(old_pid);  // 先移除，防止其他线程访问
     }
-    Page &old_page = pages_[frame_id];
-    if (old_page.IsDirty()) {
-      auto promise = disk_scheduler_->CreatePromise();
-      auto future = promise.get_future();
-      disk_scheduler_->Schedule({true, old_page.GetData(), old_page.GetPageId(), std::move(promise)});
-      future.get();
-    }
-    page_table_.erase(old_page.GetPageId());
+  }  // 释放锁
+
+  // === 第二段：无锁刷盘 ===
+  if (need_flush) {
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule({true, victim->GetData(), old_pid, std::move(promise)});
+    future.get();
   }
-  
-  *page_id = AllocatePage();
-  Page &new_page = pages_[frame_id];
-  new_page.ResetMemory();
-  new_page.page_id_ = *page_id;
-  new_page.is_dirty_ = false;
-  new_page.pin_count_ = 1;
-  
-  page_table_[*page_id] = frame_id;
-  replacer_->RecordAccess(frame_id);
-  replacer_->SetEvictable(frame_id, false);
-  return &new_page;
+
+  // === 第三段：持锁初始化新页 ===
+  {
+    std::scoped_lock<std::mutex> lock(latch_);
+    *page_id = AllocatePage();
+    Page &new_page = pages_[frame_id];
+    new_page.ResetMemory();
+    new_page.page_id_ = *page_id;
+    new_page.is_dirty_ = false;
+    new_page.pin_count_ = 1;
+    page_table_[*page_id] = frame_id;
+    replacer_->RecordAccess(frame_id);
+    replacer_->SetEvictable(frame_id, false);
+    return &new_page;
+  }
 }
 
-auto BufferPoolManager::FetchPage(page_id_t page_id, [[maybe_unused]] AccessType access_type) -> Page * {
-  std::scoped_lock<std::mutex> lock(latch_);
-  
-  if (auto it = page_table_.find(page_id); it != page_table_.end()) {
-    Page &page = pages_[it->second];
-    page.pin_count_++;
-    replacer_->RecordAccess(it->second);
-    replacer_->SetEvictable(it->second, false);
-    return &page;
-  }
-  
+auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
   frame_id_t frame_id;
-  if (!free_list_.empty()) {
-    frame_id = free_list_.front();
-    free_list_.pop_front();
-  } else {
-    if (!replacer_->Evict(&frame_id)) {
-      return nullptr;
+  bool need_flush = false;
+  page_id_t old_pid = INVALID_PAGE_ID;
+  char *old_data = nullptr;
+
+  // === 阶段1：持锁找 frame ===
+  {
+    std::scoped_lock<std::mutex> lock(latch_);
+    // 已在内存
+    if (auto it = page_table_.find(page_id); it != page_table_.end()) {
+      Page &page = pages_[it->second];
+      page.pin_count_++;
+      replacer_->RecordAccess(it->second);
+      replacer_->SetEvictable(it->second, false);
+      return &page;
     }
-    Page &old_page = pages_[frame_id];
-    if (old_page.IsDirty()) {
-      auto promise = disk_scheduler_->CreatePromise();
-      auto future = promise.get_future();
-      disk_scheduler_->Schedule({true, old_page.GetData(), old_page.GetPageId(),std::move(promise)});
-      future.get();
+    
+    // 找空闲 frame
+    if (!free_list_.empty()) {
+      frame_id = free_list_.front();
+      free_list_.pop_front();
+    } else {
+      if (!replacer_->Evict(&frame_id)) {
+        return nullptr;
+      }
+      // evict 的 frame 有旧页
+      Page &old_page = pages_[frame_id];
+      old_pid = old_page.GetPageId();
+      need_flush = old_page.IsDirty();
+      old_data = old_page.GetData();
+      page_table_.erase(old_pid);
     }
-    page_table_.erase(old_page.GetPageId());
   }
-  
+
+  // === 阶段2：无锁刷脏页 ===
+  if (need_flush) {
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule({true, old_data, old_pid, std::move(promise)});
+    future.get();
+  }
+
+  // === 阶段3：无锁读新页 ===
   Page &page = pages_[frame_id];
   page.ResetMemory();
-  page.page_id_ = page_id;
-  page.is_dirty_ = false;
-  page.pin_count_ = 1;
-  auto promise = disk_scheduler_->CreatePromise();
-  auto future = promise.get_future();
-  disk_scheduler_->Schedule({false, page.GetData(), page_id,std::move(promise)});
-  future.get();
-  page_table_[page_id] = frame_id;
-  replacer_->RecordAccess(frame_id);
-  replacer_->SetEvictable(frame_id, false);
-  
+  {
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule({false, page.GetData(), page_id, std::move(promise)});
+    future.get();
+  }
+
+  // === 阶段4：持锁更新元数据 ===
+  {
+    std::scoped_lock<std::mutex> lock(latch_);
+    page.page_id_ = page_id;
+    page.is_dirty_ = false;
+    page.pin_count_ = 1;
+    page_table_[page_id] = frame_id;
+    replacer_->RecordAccess(frame_id);
+    replacer_->SetEvictable(frame_id, false);
+  }
+
   return &page;
 }
+
 
 auto BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty, [[maybe_unused]] AccessType access_type) -> bool {
   std::scoped_lock<std::mutex> lock(latch_);
@@ -146,13 +182,11 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
   disk_scheduler_->Schedule({true, page.GetData(), page_id, std::move(promise)});
   future.get();
   page.is_dirty_ = false;
-  
   return true;
  }
 
 void BufferPoolManager::FlushAllPages() {
   std::scoped_lock<std::mutex> lock(latch_);
-  
   for (auto &[pid, fid] : page_table_) {
     Page &page = pages_[fid];
     auto promise = disk_scheduler_->CreatePromise();
@@ -170,24 +204,19 @@ auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool {
   if (it == page_table_.end()) {
     return true;
   }
-  
   Page &page = pages_[it->second];
   if (page.pin_count_ > 0) {
     return false;
   }
-  
   frame_id_t frame_id = it->second;
   page_table_.erase(it);
   replacer_->Remove(frame_id);
-  
   page.ResetMemory();
   page.page_id_ = INVALID_PAGE_ID;
   page.is_dirty_ = false;
   page.pin_count_ = 0;
-  
   free_list_.push_back(frame_id);
   DeallocatePage(page_id);
-  
   return true;
  }
 

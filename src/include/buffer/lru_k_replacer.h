@@ -17,7 +17,6 @@
 #include <mutex>  // NOLINT
 #include <unordered_map>
 #include <vector>
-
 #include "common/config.h"
 #include "common/macros.h"
 

@@ -51,7 +51,7 @@ struct DiskRequest {
  */
 class DiskScheduler {
  public:
-  explicit DiskScheduler(DiskManager *disk_manager);
+  explicit DiskScheduler(DiskManager *disk_manager,size_t num_workers = 6);
   ~DiskScheduler();
 
   /**
@@ -90,6 +90,6 @@ class DiskScheduler {
    * `std::nullopt` is put into the queue to signal to the background thread to stop execution. */
   Channel<std::optional<DiskRequest>> request_queue_;
   /** The background thread responsible for issuing scheduled requests to the disk manager. */
-  std::optional<std::thread> background_thread_;
+  std::vector<std::thread> workers_;
 };
 }  // namespace bustub

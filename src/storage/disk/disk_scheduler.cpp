@@ -16,17 +16,23 @@
 
 namespace bustub {
 
-DiskScheduler::DiskScheduler(DiskManager *disk_manager) : disk_manager_(disk_manager) {
-  // TODO(P1): remove this line after you have implemented the disk scheduler API
-  // Spawn the background thread
-  background_thread_.emplace([&] { StartWorkerThread(); });
+DiskScheduler::DiskScheduler(DiskManager *disk_manager, size_t num_workers)
+    : disk_manager_(disk_manager) {
+  // 启动 num_workers 个线程
+  for (size_t i = 0; i < num_workers; i++) {
+    workers_.emplace_back([this] { StartWorkerThread(); });
+  }
 }
 
+
 DiskScheduler::~DiskScheduler() {
-  // Put a `std::nullopt` in the queue to signal to exit the loop
-  request_queue_.Put(std::nullopt);
-  if (background_thread_.has_value()) {
-    background_thread_->join();
+  // 发送 num_workers 个终止信号
+  for (size_t i = 0; i < workers_.size(); i++) {
+    request_queue_.Put(std::nullopt);
+  }
+  // 等待所有线程结束
+  for (auto &t : workers_) {
+    t.join();
   }
 }
 
