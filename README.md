@@ -107,6 +107,9 @@ If you want to use other sanitizers,
 $ cmake -DCMAKE_BUILD_TYPE=Debug -DBUSTUB_SANITIZER=thread ..
 $ make -j`nproc`
 ```
+啦啦啦，p1rank中，我们要实现scan和get的效率提高，有几个方面1.提高io效率（并发时解决锁的冲突，细化颗粒度）2.lruk算法结构的优化（放逐的检测？）3.磁盘请求拉取的效率 。。。。
+目前以做到：将刷盘过程从锁中领出来，因为只要能保证刷盘期间没人动这块内存，就可以把 I/O 移到锁外，具体做法为page_table_.erase(old_page_id);这样让这个id变成ghost，这样就保证了数据被访问时，不会被其他线程修改。
+还有就是把worker_数组加入到diskshcdule中，让线程读取效率提高，并通过合适的参数设置，避免线程争抢
 
 There are some differences between macOS and Linux (i.e., mutex behavior) that might cause test cases
 to produce different results in different platforms. We recommend students to use a Linux VM for running
