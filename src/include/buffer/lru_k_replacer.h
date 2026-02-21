@@ -14,6 +14,7 @@
 
 #include <limits>
 #include <list>
+#include <set>
 #include <mutex>  // NOLINT
 #include <unordered_map>
 #include <vector>
@@ -157,6 +158,10 @@ class LRUKReplacer {
    size_t replacer_size_;
    size_t k_;
    std::mutex latch_;
+   std::list<frame_id_t> less_k_list;
+   std::unordered_map<frame_id_t, std::list<frame_id_t>::iterator> less_k_map;
+   std::set<std::pair<size_t, frame_id_t>> more_k_set;
+   std::unordered_map<frame_id_t, size_t> more_k_map;
 };
 
 }  // namespace bustub

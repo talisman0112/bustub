@@ -13,6 +13,7 @@
 #pragma once
 
 #include <list>
+#include <condition_variable>
 #include <memory>
 #include <mutex>  // NOLINT
 #include <unordered_map>
@@ -191,6 +192,7 @@ class BufferPoolManager {
   std::list<frame_id_t> free_list_;
   /** This latch protects shared data structures. We recommend updating this comment to describe what it protects. */
   std::mutex latch_;
+  std::unordered_map<page_id_t, std::shared_ptr<std::condition_variable>> pending_fetches_;  // ✅ 对
   /**
    * @brief Allocate a page on disk. Caller should acquire the latch before calling this function.
    * @return the id of the allocated page

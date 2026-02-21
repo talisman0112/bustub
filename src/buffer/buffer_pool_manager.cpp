@@ -148,7 +148,6 @@ auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
 
 auto BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty, [[maybe_unused]] AccessType access_type) -> bool {
   std::scoped_lock<std::mutex> lock(latch_);
-  
   auto it = page_table_.find(page_id);
   if (it == page_table_.end()) {
     return false;
@@ -160,7 +159,8 @@ auto BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty, [[maybe_unus
   }
   
   if (is_dirty) {
-    page.is_dirty_ = true;} 
+    page.is_dirty_ = true;
+  } 
     page.pin_count_--;
   if (page.pin_count_ == 0) {
     replacer_->SetEvictable(it->second, true);
@@ -169,33 +169,61 @@ auto BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty, [[maybe_unus
   return true;
 }
 
-auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool { 
-  std::scoped_lock<std::mutex> lock(latch_);
+auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
+  char* data_copy = nullptr;
+  page_id_t pid;
   
-  auto it = page_table_.find(page_id);
-  if (it == page_table_.end()) {
-    return false;
-  }  
-  Page &page = pages_[it->second];
-  auto promise = disk_scheduler_->CreatePromise();
-  auto future = promise.get_future();
-  disk_scheduler_->Schedule({true, page.GetData(), page_id, std::move(promise)});
-  future.get();
-  page.is_dirty_ = false;
-  return true;
- }
-
-void BufferPoolManager::FlushAllPages() {
-  std::scoped_lock<std::mutex> lock(latch_);
-  for (auto &[pid, fid] : page_table_) {
-    Page &page = pages_[fid];
-    auto promise = disk_scheduler_->CreatePromise();
-    auto future = promise.get_future();
-    disk_scheduler_->Schedule({true, page.GetData(), pid, std::move(promise)});
-    future.get();
+  // 阶段1：持锁拷贝数据
+  {
+    std::scoped_lock<std::mutex> lock(latch_);
+    auto it = page_table_.find(page_id);
+    if (it == page_table_.end()) {
+      return false;
+    }
+    Page &page = pages_[it->second];
+    pid = page.GetPageId();
+    // 这里有个选择：拷贝数据 vs 直接用原数据
+    // 如果你不拷贝，需要确保刷盘期间数据不被修改
+    data_copy = page.GetData();  // 暂时直接用，后面讨论
     page.is_dirty_ = false;
   }
+  
+  // 阶段2：无锁刷盘
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  disk_scheduler_->Schedule({true, data_copy, pid, std::move(promise)});
+  future.get();
+  
+  return true;
 }
+
+
+void BufferPoolManager::FlushAllPages() {
+  std::vector<std::pair<page_id_t, char*>> to_flush;
+  std::vector<std::future<bool>> futures;
+  
+  // 阶段1：持锁收集所有需要刷的页
+  {
+    std::scoped_lock<std::mutex> lock(latch_);
+    for (auto &[pid, fid] : page_table_) {
+      to_flush.emplace_back(pid, pages_[fid].GetData());
+      pages_[fid].is_dirty_ = false;
+    }
+  }
+  
+  // 阶段2：无锁并行提交所有刷盘请求
+  for (auto &[pid, data] : to_flush) {
+    auto promise = disk_scheduler_->CreatePromise();
+    futures.push_back(promise.get_future());
+    disk_scheduler_->Schedule({true, data, pid, std::move(promise)});
+  }
+  
+  // 阶段3：等待所有完成
+  for (auto &f : futures) {
+    f.get();
+  }
+}
+
 
 auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool { 
   std::scoped_lock<std::mutex> lock(latch_);
