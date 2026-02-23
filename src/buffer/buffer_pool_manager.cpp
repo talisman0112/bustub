@@ -37,6 +37,7 @@ auto BufferPoolManager::NewPage(page_id_t *page_id) -> Page * {
   Page *victim = nullptr;
   bool need_flush = false;
   page_id_t old_pid = INVALID_PAGE_ID;
+  char temp_buffer[BUSTUB_PAGE_SIZE];
   // === 第一段：持锁找 frame ===
   {
     std::scoped_lock<std::mutex> lock(latch_);
@@ -47,69 +48,94 @@ auto BufferPoolManager::NewPage(page_id_t *page_id) -> Page * {
       if (!replacer_->Evict(&frame_id)) {
         return nullptr;
       }
+      Page &old_page = pages_[frame_id];
       victim = &pages_[frame_id];
       old_pid = victim->GetPageId();
       need_flush = victim->IsDirty();
-      page_table_.erase(old_pid);  // 先移除，防止其他线程访问
+      std::memcpy(temp_buffer, old_page.data_, BUSTUB_PAGE_SIZE);
+      page_table_.erase(old_pid);
+      replacer_->Remove(frame_id);
     }
+    *page_id = AllocatePage();
+    Page &page = pages_[frame_id];
+    page.is_loading = true;
+    page.page_id_ = *page_id;
+    page.pin_count_ = 1;
+    page.is_dirty_ = false;
+    page_table_[*page_id] = frame_id;
+    replacer_->RecordAccess(frame_id);
+    replacer_->SetEvictable(frame_id, false);
   }  // 释放锁
 
   // === 第二段：无锁刷盘 ===
   if (need_flush) {
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
-    disk_scheduler_->Schedule({true, victim->GetData(), old_pid, std::move(promise)});
+    disk_scheduler_->Schedule({true,temp_buffer, old_pid, std::move(promise)});
     future.get();
   }
 
   // === 第三段：持锁初始化新页 ===
   {
     std::scoped_lock<std::mutex> lock(latch_);
-    *page_id = AllocatePage();
-    Page &new_page = pages_[frame_id];
-    new_page.ResetMemory();
-    new_page.page_id_ = *page_id;
-    new_page.is_dirty_ = false;
-    new_page.pin_count_ = 1;
-    page_table_[*page_id] = frame_id;
-    replacer_->RecordAccess(frame_id);
-    replacer_->SetEvictable(frame_id, false);
-    return &new_page;
+    Page &page = pages_[frame_id];
+    page.ResetMemory();
+    page.is_loading = false;
+    page.cv_.notify_all();
+    return &page;
   }
 }
-
 auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
-  frame_id_t frame_id;
+  frame_id_t frame_id=-1;
   bool need_flush = false;
   page_id_t old_pid = INVALID_PAGE_ID;
-  char *old_data = nullptr;
+  char temp_buffer[BUSTUB_PAGE_SIZE];
+  std::optional<std::future<bool>> flush_future;
 
   // === 阶段1：持锁找 frame ===
   {
-    std::scoped_lock<std::mutex> lock(latch_);
-    // 已在内存
-    if (auto it = page_table_.find(page_id); it != page_table_.end()) {
-      Page &page = pages_[it->second];
-      page.pin_count_++;
-      replacer_->RecordAccess(it->second);
-      replacer_->SetEvictable(it->second, false);
-      return &page;
-    }
-    
+    std::unique_lock<std::mutex> lock(latch_);
+  while (true) {
+  auto it = page_table_.find(page_id);  // 每次重新 find
+  if (it == page_table_.end()) break;
+  Page &page = pages_[it->second];
+  if (page.is_loading) {
+    page.cv_.wait(lock);
+    continue;
+  }
+  page.pin_count_++;
+  replacer_->RecordAccess(it->second);
+  replacer_->SetEvictable(it->second, false);
+  return &page;
+}
     // 找空闲 frame
     if (!free_list_.empty()) {
-      frame_id = free_list_.front();
-      free_list_.pop_front();
+    frame_id = free_list_.front();
+    free_list_.pop_front();
+    pages_[frame_id].is_loading = true;
+    pages_[frame_id].page_id_ = page_id;
+    pages_[frame_id].pin_count_ = 1;
+    pages_[frame_id].is_dirty_ = false;
+    page_table_[page_id] = frame_id;
+    replacer_->RecordAccess(frame_id);
+    replacer_->SetEvictable(frame_id, false);
     } else {
       if (!replacer_->Evict(&frame_id)) {
         return nullptr;
       }
-      // evict 的 frame 有旧页
-      Page &old_page = pages_[frame_id];
-      old_pid = old_page.GetPageId();
-      need_flush = old_page.IsDirty();
-      old_data = old_page.GetData();
-      page_table_.erase(old_pid);
+    Page &old_page = pages_[frame_id];
+  old_pid = old_page.GetPageId();
+  need_flush = old_page.IsDirty();
+  page_table_.erase(old_pid);
+  std::memcpy(temp_buffer, old_page.data_, BUSTUB_PAGE_SIZE);
+  // replacer_->Remove(frame_id); 
+  pages_[frame_id].is_loading = true;
+  pages_[frame_id].page_id_ = page_id;         // 可以提前写，也可以等阶段4再写
+  pages_[frame_id].pin_count_ = 1;             // 先 pin 住，防止被再次 evict
+  pages_[frame_id].is_dirty_ = false;
+  page_table_[page_id] = frame_id;             // 提前插入映射！！
+  replacer_->RecordAccess(frame_id);           // 可以提前记录
+  replacer_->SetEvictable(frame_id, false);  
     }
   }
 
@@ -117,57 +143,28 @@ auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
   if (need_flush) {
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
-    disk_scheduler_->Schedule({true, old_data, old_pid, std::move(promise)});
+    disk_scheduler_->Schedule({true,temp_buffer, old_pid, std::move(promise)});
     future.get();
   }
-
   // === 阶段3：无锁读新页 ===
-  Page &page = pages_[frame_id];
-  page.ResetMemory();
+  
   {
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
-    disk_scheduler_->Schedule({false, page.GetData(), page_id, std::move(promise)});
+    disk_scheduler_->Schedule({false, pages_[frame_id].GetData(), page_id, std::move(promise)});
     future.get();
   }
 
   // === 阶段4：持锁更新元数据 ===
   {
-    std::scoped_lock<std::mutex> lock(latch_);
-    page.page_id_ = page_id;
-    page.is_dirty_ = false;
-    page.pin_count_ = 1;
-    page_table_[page_id] = frame_id;
-    replacer_->RecordAccess(frame_id);
-    replacer_->SetEvictable(frame_id, false);
-  }
-
-  return &page;
-}
-
-
-auto BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty, [[maybe_unused]] AccessType access_type) -> bool {
   std::scoped_lock<std::mutex> lock(latch_);
-  auto it = page_table_.find(page_id);
-  if (it == page_table_.end()) {
-    return false;
-  }
-  
-  Page &page = pages_[it->second];
-  if (page.pin_count_ <= 0) {
-    return false;
-  }
-  
-  if (is_dirty) {
-    page.is_dirty_ = true;
-  } 
-    page.pin_count_--;
-  if (page.pin_count_ == 0) {
-    replacer_->SetEvictable(it->second, true);
-  }
-  
-  return true;
+  Page &page = pages_[frame_id];
+  page.is_loading = false;           
+  page.cv_.notify_all();
+  return &page;
+  }  
 }
+
 
 auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
   char* data_copy = nullptr;
@@ -182,9 +179,7 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
     }
     Page &page = pages_[it->second];
     pid = page.GetPageId();
-    // 这里有个选择：拷贝数据 vs 直接用原数据
-    // 如果你不拷贝，需要确保刷盘期间数据不被修改
-    data_copy = page.GetData();  // 暂时直接用，后面讨论
+    data_copy = page.GetData();
     page.is_dirty_ = false;
   }
   
@@ -196,6 +191,7 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
   
   return true;
 }
+
 
 
 void BufferPoolManager::FlushAllPages() {
@@ -224,7 +220,27 @@ void BufferPoolManager::FlushAllPages() {
   }
 }
 
-
+auto BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty, AccessType access_type) -> bool {
+    std::scoped_lock<std::mutex> lock(latch_);
+    auto it = page_table_.find(page_id);
+    if (it == page_table_.end()) {
+        return false;  
+    }
+    frame_id_t frame_id = it->second;
+    Page &page = pages_[frame_id];
+    int current = page.pin_count_.load(std::memory_order_relaxed);
+    if (current <= 0) {
+        return false;
+    }
+    if (is_dirty) {
+        page.is_dirty_ = true;
+    }
+    page.pin_count_--;
+    if (page.pin_count_== 0) {
+        replacer_->SetEvictable(frame_id, true);
+    }
+    return true;
+}
 auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool { 
   std::scoped_lock<std::mutex> lock(latch_);
   

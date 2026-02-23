@@ -11,10 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #pragma once
-
+#include <condition_variable>
 #include <cstring>
 #include <iostream>
-
+#include <atomic>
 #include "common/config.h"
 #include "common/rwlatch.h"
 
@@ -80,7 +80,7 @@ class Page {
  private:
   /** Zeroes out the data that is held within the page. */
   inline void ResetMemory() { memset(data_, OFFSET_PAGE_START, BUSTUB_PAGE_SIZE); }
-
+  std::condition_variable_any cv_;
   /** The actual data that is stored within a page. */
   // Usually this should be stored as `char data_[BUSTUB_PAGE_SIZE]{};`. But to enable ASAN to detect page overflow,
   // we store it as a ptr.
@@ -88,11 +88,12 @@ class Page {
   /** The ID of this page. */
   page_id_t page_id_ = INVALID_PAGE_ID;
   /** The pin count of this page. */
-  int pin_count_ = 0;
+  std::atomic<int> pin_count_ = 0;
   /** True if the page is dirty, i.e. it is different from its corresponding page on disk. */
   bool is_dirty_ = false;
   /** Page latch. */
   ReaderWriterLatch rwlatch_;
+  bool is_loading=false;
 };
 
 }  // namespace bustub
