@@ -24,7 +24,6 @@ DiskScheduler::DiskScheduler(DiskManager *disk_manager, size_t num_workers)
   }
 }
 
-
 DiskScheduler::~DiskScheduler() {
   // 发送 num_workers 个终止信号
   for (size_t i = 0; i < workers_.size(); i++) {

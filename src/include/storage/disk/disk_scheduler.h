@@ -51,7 +51,7 @@ struct DiskRequest {
  */
 class DiskScheduler {
  public:
-  explicit DiskScheduler(DiskManager *disk_manager,size_t num_workers = 22);
+  explicit DiskScheduler(DiskManager *disk_manager,size_t num_workers = 17);
   ~DiskScheduler();
 
   /**
