@@ -30,7 +30,11 @@ BufferPoolManager::BufferPoolManager(size_t pool_size, DiskManager *disk_manager
   }
 }
 
-BufferPoolManager::~BufferPoolManager() { delete[] pages_; }
+BufferPoolManager::~BufferPoolManager() { 
+   std::cout << "Hit: " << hit_count_ << ", Miss: " << miss_count_ 
+              << ", Rate: " << (double)hit_count_ / (hit_count_ + miss_count_) <<",pool_size"<<pool_size_<< std::endl;
+    delete[] pages_;
+ }
 
 auto BufferPoolManager::NewPage(page_id_t *page_id) -> Page * {
   frame_id_t frame_id;
@@ -88,6 +92,7 @@ auto BufferPoolManager::NewPage(page_id_t *page_id) -> Page * {
 auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
   frame_id_t frame_id=-1;
   bool need_flush = false;
+  bool cache_hit = false;
   page_id_t old_pid = INVALID_PAGE_ID;
   char temp_buffer[BUSTUB_PAGE_SIZE];
   std::optional<std::future<bool>> flush_future;
@@ -96,8 +101,9 @@ auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
   {
     std::unique_lock<std::mutex> lock(latch_);
   while (true) {
-  auto it = page_table_.find(page_id);  // 每次重新 find
+  auto it = page_table_.find(page_id);  
   if (it == page_table_.end()) break;
+
   Page &page = pages_[it->second];
   if (page.is_loading) {
     page.cv_.wait(lock);
@@ -128,7 +134,6 @@ auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
   need_flush = old_page.IsDirty();
   page_table_.erase(old_pid);
   std::memcpy(temp_buffer, old_page.data_, BUSTUB_PAGE_SIZE);
-  // replacer_->Remove(frame_id); 
   pages_[frame_id].is_loading = true;
   pages_[frame_id].page_id_ = page_id;         // 可以提前写，也可以等阶段4再写
   pages_[frame_id].pin_count_ = 1;             // 先 pin 住，防止被再次 evict
