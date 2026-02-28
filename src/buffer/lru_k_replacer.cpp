@@ -20,6 +20,9 @@ LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : replacer_size_(num_fra
 auto LRUKReplacer::Evict(frame_id_t *frame_id) -> bool {
     std::scoped_lock<std::mutex> lock(latch_);
    if (!less_k_list.empty()) {
+    std::cout << "Before Evict less_k_list: ";
+    for (auto f : less_k_list) std::cout << f << " ";
+    std::cout << " (back = " << less_k_list.back() << ")" << std::endl;
         frame_id_t victim = less_k_list.back();
         less_k_list.pop_back();
         less_k_map.erase(victim);
@@ -47,6 +50,7 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType
     if (frame_id < 0 || static_cast<size_t>(frame_id) >= replacer_size_) {
         throw std::exception();
     }
+
     auto it = node_store_.find(frame_id);
     if (it == node_store_.end()) {
         LRUKNode node;
@@ -57,23 +61,24 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType
         node_store_.insert({frame_id, node});
         it = node_store_.find(frame_id);
     }
+
     LRUKNode &node = it->second;
     node.history_.push_back(current_timestamp_);
     current_timestamp_++;
+
+    // 提前修剪 history，永远 <= k
+    while (node.history_.size() > k_) {
+        node.history_.pop_front();
+    }
 
     if (!node.is_evictable_) {
         return;
     }
 
-    // 先修剪 history，永远保持 <= k 个
-    while (node.history_.size() > k_) {
-        node.history_.pop_front();
-    }
-
-    size_t sz = node.history_.size();  
+    size_t sz = node.history_.size();
 
     if (sz < k_) {
-        // < k 次，维护 less_k 的 LRU 顺序
+        // < k：维护 LRU 顺序
         auto map_it = less_k_map.find(frame_id);
         if (map_it != less_k_map.end()) {
             less_k_list.splice(less_k_list.begin(), less_k_list, map_it->second);
@@ -83,26 +88,30 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType
             less_k_map[frame_id] = less_k_list.begin();
         }
     } else {
-        // == k 次（因为 > k 已经被 pop 掉了）
-        //  more_k
+        // sz == k_
         auto lit = less_k_map.find(frame_id);
         if (lit != less_k_map.end()) {
             less_k_list.erase(lit->second);
             less_k_map.erase(frame_id);
         }
-        size_t kth_ts = node.history_.front();  
+
+        // 更新 more_k
         auto moreit = more_k_map.find(frame_id);
         if (moreit != more_k_map.end()) {
             more_k_set.erase({moreit->second, frame_id});
             more_k_map.erase(frame_id);
         }
 
+        // 插入新的 k-th ts
+        size_t kth_ts = node.history_.front();
         more_k_set.insert({kth_ts, frame_id});
         more_k_map[frame_id] = kth_ts;
     }
 }
+
 void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
     std::scoped_lock<std::mutex> lock(latch_);  
+
     auto it = node_store_.find(frame_id);
     if (it == node_store_.end()) {
         return;
@@ -111,13 +120,26 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
     if (node.is_evictable_ == set_evictable) {
         return;
     }
+
     if (set_evictable) {
+        auto lit = less_k_map.find(frame_id);
+        if (lit != less_k_map.end()) {
+            less_k_list.erase(lit->second);
+            less_k_map.erase(frame_id);
+        }
+        auto mit = more_k_map.find(frame_id);
+        if (mit != more_k_map.end()) {
+            more_k_set.erase({mit->second, frame_id});
+            more_k_map.erase(frame_id);
+        }
+
         node.is_evictable_ = true;
         curr_size_++;
-        // 同步修历史
+        // 剪 history
         while (node.history_.size() > k_) {
             node.history_.pop_front();
         }
+
         size_t sz = node.history_.size();
 
         if (sz < k_) {
@@ -125,19 +147,13 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
             less_k_map[frame_id] = less_k_list.begin();
         } else if (sz >= k_ && !node.history_.empty()) {
             size_t kth_ts = node.history_.front();
-            auto mit = more_k_map.find(frame_id);
-            if (mit != more_k_map.end()) {
-                more_k_set.erase({mit->second, frame_id});
-                more_k_map.erase(frame_id);
-            }
-
             more_k_set.insert({kth_ts, frame_id});
             more_k_map[frame_id] = kth_ts;
         }
-    } else {
+    } 
+    else {
         node.is_evictable_ = false;
         curr_size_--;
-
         auto lit = less_k_map.find(frame_id);
         if (lit != less_k_map.end()) {
             less_k_list.erase(lit->second);
