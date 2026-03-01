@@ -19,21 +19,22 @@ LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : replacer_size_(num_fra
 
 auto LRUKReplacer::Evict(frame_id_t *frame_id) -> bool {
     std::scoped_lock<std::mutex> lock(latch_);
-   if (!less_k_list.empty()) {
-    std::cout << "Before Evict less_k_list: ";
-    for (auto f : less_k_list) std::cout << f << " ";
-    std::cout << " (back = " << less_k_list.back() << ")" << std::endl;
-        frame_id_t victim = less_k_list.back();
-        less_k_list.pop_back();
+    // 优先淘汰 less_k（按 last_timestamp 升序，最小的先淘汰）
+    if (!less_k_set.empty()) {
+        auto it = less_k_set.begin();
+        frame_id_t victim = it->second;      
+        less_k_set.erase(it);
         less_k_map.erase(victim);
         node_store_.erase(victim);
         curr_size_--;
         *frame_id = victim;
         return true;
     }
-    else if (!more_k_set.empty()) {
+    
+    // 再淘汰 more_k
+    if (!more_k_set.empty()) {
         auto it = more_k_set.begin();
-        frame_id_t victim = it->second;
+        frame_id_t victim = it->second; 
         more_k_set.erase(it);
         more_k_map.erase(victim);
         node_store_.erase(victim);
@@ -41,8 +42,9 @@ auto LRUKReplacer::Evict(frame_id_t *frame_id) -> bool {
         *frame_id = victim;
         return true;
     }
+    
     return false;
- }
+}
 
 void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType access_type) {
     std::scoped_lock<std::mutex> lock(latch_);
@@ -61,12 +63,10 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType
         node_store_.insert({frame_id, node});
         it = node_store_.find(frame_id);
     }
-
     LRUKNode &node = it->second;
-    node.history_.push_back(current_timestamp_);
-    current_timestamp_++;
-
-    // 提前修剪 history，永远 <= k
+    size_t new_ts = current_timestamp_++;
+    node.history_.push_back(new_ts);
+    //history，永远 <= k
     while (node.history_.size() > k_) {
         node.history_.pop_front();
     }
@@ -78,20 +78,18 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType
     size_t sz = node.history_.size();
 
     if (sz < k_) {
-        // < k：维护 LRU 顺序
+        // < k：更新 less_k_set 中的位置
         auto map_it = less_k_map.find(frame_id);
         if (map_it != less_k_map.end()) {
-            less_k_list.splice(less_k_list.begin(), less_k_list, map_it->second);
-            less_k_map[frame_id] = less_k_list.begin();
-        } else {
-            less_k_list.push_front(frame_id);
-            less_k_map[frame_id] = less_k_list.begin();
+            less_k_set.erase({map_it->second, frame_id});
         }
+        less_k_set.insert({new_ts, frame_id});
+        less_k_map[frame_id] = new_ts;
     } else {
-        // sz == k_
+        // sz == k_，升级到 more_k
         auto lit = less_k_map.find(frame_id);
         if (lit != less_k_map.end()) {
-            less_k_list.erase(lit->second);
+            less_k_set.erase({lit->second, frame_id});
             less_k_map.erase(frame_id);
         }
 
@@ -122,9 +120,10 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
     }
 
     if (set_evictable) {
+        // 先清理旧位置
         auto lit = less_k_map.find(frame_id);
         if (lit != less_k_map.end()) {
-            less_k_list.erase(lit->second);
+            less_k_set.erase({lit->second, frame_id});
             less_k_map.erase(frame_id);
         }
         auto mit = more_k_map.find(frame_id);
@@ -143,8 +142,9 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
         size_t sz = node.history_.size();
 
         if (sz < k_) {
-            less_k_list.push_front(frame_id);
-            less_k_map[frame_id] = less_k_list.begin();
+            size_t last_ts = node.history_.back();
+            less_k_set.insert({last_ts, frame_id});
+            less_k_map[frame_id] = last_ts;
         } else if (sz >= k_ && !node.history_.empty()) {
             size_t kth_ts = node.history_.front();
             more_k_set.insert({kth_ts, frame_id});
@@ -154,9 +154,10 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
     else {
         node.is_evictable_ = false;
         curr_size_--;
+        
         auto lit = less_k_map.find(frame_id);
         if (lit != less_k_map.end()) {
-            less_k_list.erase(lit->second);
+            less_k_set.erase({lit->second, frame_id});
             less_k_map.erase(frame_id);
         }
         auto mit = more_k_map.find(frame_id);
@@ -166,8 +167,10 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
         }
     }
 }
+
 void LRUKReplacer::Remove(frame_id_t frame_id) {
     std::scoped_lock<std::mutex> lock(latch_);
+    
     auto it = node_store_.find(frame_id);
     if (it == node_store_.end()) {
         return;
@@ -175,24 +178,27 @@ void LRUKReplacer::Remove(frame_id_t frame_id) {
     if (!it->second.is_evictable_) {
         throw std::exception();
     }
-    // 清less_k
+    
+    // 清 less_k
     auto lit = less_k_map.find(frame_id);
     if (lit != less_k_map.end()) {
-        less_k_list.erase(lit->second);
+        less_k_set.erase({lit->second, frame_id});
         less_k_map.erase(lit);
     }
+    
     // 清 more_k
     auto mit = more_k_map.find(frame_id);
     if (mit != more_k_map.end()) {
         more_k_set.erase({mit->second, frame_id});
         more_k_map.erase(mit);
     }
+    
     node_store_.erase(it);
     curr_size_--;
 }
 
-
 auto LRUKReplacer::Size() -> size_t { return curr_size_; }
 
-}  // namespace bustubp
+}  // namespace bustub
+
 

@@ -9,7 +9,7 @@
 // Copyright (c) 2015-2021, Carnegie Mellon University Database Group
 //
 //===----------------------------------------------------------------------===//
-
+#include <array>
 #include "buffer/buffer_pool_manager.h"
 #include "storage/page/page.h"
 #include "common/exception.h"
@@ -91,7 +91,6 @@ auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
   page_id_t old_pid = INVALID_PAGE_ID;
   char temp_buffer[BUSTUB_PAGE_SIZE];
   std::optional<std::future<bool>> flush_future;
-
   // 持锁找帧
   {
     std::unique_lock<std::mutex> lock(latch_);
@@ -158,16 +157,15 @@ auto BufferPoolManager::FetchPage(page_id_t page_id, AccessType) -> Page * {
   std::scoped_lock<std::mutex> lock(latch_);
   Page &page = pages_[frame_id];
   page.is_loading = false;           
-  page.cv_.notify_one();
+  page.cv_.notify_all();
   return &page;
   }  
 }
 
 auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
-  char* data_copy = nullptr;
+  char temp_buffer[BUSTUB_PAGE_SIZE];
   page_id_t pid;
   
-  //持锁拷数据
   {
     std::scoped_lock<std::mutex> lock(latch_);
     auto it = page_table_.find(page_id);
@@ -176,40 +174,37 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
     }
     Page &page = pages_[it->second];
     pid = page.GetPageId();
-    data_copy = page.GetData();
+    std::memcpy(temp_buffer, page.GetData(), BUSTUB_PAGE_SIZE);  // ← 拷贝数据
     page.is_dirty_ = false;
   }
   
-  //刷盘
   auto promise = disk_scheduler_->CreatePromise();
   auto future = promise.get_future();
-  disk_scheduler_->Schedule({true, data_copy, pid, std::move(promise)});
+  disk_scheduler_->Schedule({true, temp_buffer, pid, std::move(promise)});
   future.get();
   
   return true;
 }
-
 void BufferPoolManager::FlushAllPages() {
-  std::vector<std::pair<page_id_t, char*>> to_flush;
+  std::vector<std::pair<page_id_t, std::array<char, BUSTUB_PAGE_SIZE>>> to_flush;
   std::vector<std::future<bool>> futures;
   
-  //持锁找页
   {
     std::scoped_lock<std::mutex> lock(latch_);
     for (auto &[pid, fid] : page_table_) {
-      to_flush.emplace_back(pid, pages_[fid].GetData());
+      std::array<char, BUSTUB_PAGE_SIZE> buf;
+      std::memcpy(buf.data(), pages_[fid].GetData(), BUSTUB_PAGE_SIZE);  // ← 拷贝
+      to_flush.emplace_back(pid, buf);
       pages_[fid].is_dirty_ = false;
     }
   }
   
-  //无锁并行提交
   for (auto &[pid, data] : to_flush) {
     auto promise = disk_scheduler_->CreatePromise();
     futures.push_back(promise.get_future());
-    disk_scheduler_->Schedule({true, data, pid, std::move(promise)});
+    disk_scheduler_->Schedule({true, data.data(), pid, std::move(promise)});
   }
   
-  //等待所有完成
   for (auto &f : futures) {
     f.get();
   }
@@ -262,13 +257,39 @@ auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool {
 
 auto BufferPoolManager::AllocatePage() -> page_id_t { return next_page_id_++; }
 
-auto BufferPoolManager::FetchPageBasic(page_id_t page_id) -> BasicPageGuard { return {this, nullptr}; }
+auto BufferPoolManager::FetchPageBasic(page_id_t page_id) -> BasicPageGuard { 
+  Page *page=FetchPage(page_id);
+  if (page != nullptr) {
+        return {this, page};
+  }
+  return {this, nullptr};
+ }
 
-auto BufferPoolManager::FetchPageRead(page_id_t page_id) -> ReadPageGuard { return {this, nullptr}; }
+auto BufferPoolManager::FetchPageRead(page_id_t page_id) -> ReadPageGuard { 
+  Page *page=FetchPage(page_id);
+  if (page != nullptr) {
+    page->RLatch();
+    return {this, page};
+  }
+  return {this, nullptr}; 
+}
 
-auto BufferPoolManager::FetchPageWrite(page_id_t page_id) -> WritePageGuard { return {this, nullptr}; }
+auto BufferPoolManager::FetchPageWrite(page_id_t page_id) -> WritePageGuard { 
+  Page *page=FetchPage(page_id);
+  if (page != nullptr) {
+    page->WLatch();
+    return {this, page};
+  }
+  return {this, nullptr}; 
+}
 
-auto BufferPoolManager::NewPageGuarded(page_id_t *page_id) -> BasicPageGuard { return {this, nullptr}; }
+auto BufferPoolManager::NewPageGuarded(page_id_t *page_id) -> BasicPageGuard { 
+  Page *page=NewPage(page_id);
+  if(page!=nullptr){
+    return {this, page};
+  }
+  return {this, nullptr}; 
+}
 
 }  // namespace bustub
 //草
