@@ -27,6 +27,7 @@
 #include "storage/page/extendible_htable_directory_page.h"
 #include "storage/page/extendible_htable_header_page.h"
 #include "storage/page/page_guard.h"
+#include "disk_extendible_hash_table.h"
 
 namespace bustub {
 
@@ -42,10 +43,18 @@ DiskExtendibleHashTable<K, V, KC>::DiskExtendibleHashTable(const std::string &na
       directory_max_depth_(directory_max_depth),
       bucket_max_size_(bucket_max_size) {
 }
+
+
 template <typename K, typename V, typename KC>
 auto DiskExtendibleHashTable<K, V, KC>::Hash(K key) const -> uint32_t {
   return static_cast<uint32_t>(hash_fn_.GetHash(key));
 }
+template <typename K, typename V, typename KC>
+void DiskExtendibleHashTable<K, V, KC>::MigrateEntries(ExtendibleHTableBucketPage<K, V, KC> *old_bucket,
+                                                       ExtendibleHTableBucketPage<K, V, KC> *new_bucket,
+                                                       uint32_t new_bucket_idx, uint32_t local_depth_mask) {
+                                                        
+                                                       }
 /*****************************************************************************
  * SEARCH
  *****************************************************************************/
@@ -84,31 +93,59 @@ return find;
 
 template <typename K, typename V, typename KC>
 auto DiskExtendibleHashTable<K, V, KC>::Insert(const K &key, const V &value, Transaction *transaction) -> bool {
-  return false;
+  
 }
-
 template <typename K, typename V, typename KC>
 auto DiskExtendibleHashTable<K, V, KC>::InsertToNewDirectory(ExtendibleHTableHeaderPage *header, uint32_t directory_idx,
                                                              uint32_t hash, const K &key, const V &value) -> bool {
-  return false;
+  page_id_t new_directory_page_id = INVALID_PAGE_ID;
+  auto new_directory_guard = bpm_->NewPageGuarded(&new_directory_page_id).UpgradeWrite();
+  if (new_directory_page_id == INVALID_PAGE_ID) {
+    return false; 
+  }
+  auto *new_directory_page = new_directory_guard.AsMut<ExtendibleHTableDirectoryPage>();
+  new_directory_page->Init(directory_max_depth_);
+  header->SetDirectoryPageId(directory_idx, new_directory_page_id);
+  return InsertToNewBucket(new_directory_page, new_directory_page->HashToBucketIndex(hash), key, value);
 }
 
 template <typename K, typename V, typename KC>
 auto DiskExtendibleHashTable<K, V, KC>::InsertToNewBucket(ExtendibleHTableDirectoryPage *directory, uint32_t bucket_idx,
                                                           const K &key, const V &value) -> bool {
-  return false;
+  page_id_t new_bucket_page_id = INVALID_PAGE_ID;
+  auto new_bucket_guard = bpm_->NewPageGuarded(&new_bucket_page_id).UpgradeWrite();
+  if (new_bucket_page_id == INVALID_PAGE_ID) {
+    return false; 
+  }
+  auto *new_bucket_page = new_bucket_guard.AsMut<ExtendibleHTableBucketPage<K, V, KC>>();
+  new_bucket_page->Init(bucket_max_size_);
+  uint32_t num_slots = directory->Size(); 
+  for (uint32_t i = 0; i < num_slots; ++i) {
+    directory->SetBucketPageId(i, new_bucket_page_id);
+    directory->SetLocalDepth(i, 0);
+  }
+  return new_bucket_page->insert(key, value, cmp_);
 }
-
 template <typename K, typename V, typename KC>
 void DiskExtendibleHashTable<K, V, KC>::UpdateDirectoryMapping(ExtendibleHTableDirectoryPage *directory,
                                                                uint32_t new_bucket_idx, page_id_t new_bucket_page_id,
-                                                               uint32_t new_local_depth, uint32_t local_depth_mask) {
-  throw NotImplementedException("DiskExtendibleHashTable is not implemented");
+                                                               uint32_t new_local_depth) {
+  uint32_t split = (1 << (new_local_depth- 1));
+  uint32_t mask=split-1;
+  uint32_t sign=(mask&new_bucket_idx);
+      for(uint32_t i=0;i<directory->Size();i++){
+        if((i&mask)==sign){
+          directory->SetLocalDepth(i, new_local_depth);
+          if((i&split)!=0){
+            directory->SetBucketPageId(i, new_bucket_page_id);
+          }
+        }
+      }
 }
 
 /*****************************************************************************
- * REMOVE
- *****************************************************************************/
+   * REMOVE
+   *****************************************************************************/
 template <typename K, typename V, typename KC>
 auto DiskExtendibleHashTable<K, V, KC>::Remove(const K &key, Transaction *transaction) -> bool {
   return false;

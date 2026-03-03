@@ -50,9 +50,6 @@ void ExtendibleHTableDirectoryPage::SetBucketPageId(uint32_t bucket_idx, page_id
 
 auto ExtendibleHTableDirectoryPage::GetSplitImageIndex(uint32_t bucket_idx) const -> uint32_t { 
    uint32_t ld = local_depths_[bucket_idx];
-  if (ld == 0) {
-    return 0; 
-  }
   return bucket_idx ^ (1 << (ld - 1));
  }
 

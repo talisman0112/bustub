@@ -117,7 +117,7 @@ class DiskExtendibleHashTable {
       -> bool;
 
   void UpdateDirectoryMapping(ExtendibleHTableDirectoryPage *directory, uint32_t new_bucket_idx,
-                              page_id_t new_bucket_page_id, uint32_t new_local_depth, uint32_t local_depth_mask);
+                              page_id_t new_bucket_page_id, uint32_t new_local_depth);
 
   void MigrateEntries(ExtendibleHTableBucketPage<K, V, KC> *old_bucket,
                       ExtendibleHTableBucketPage<K, V, KC> *new_bucket, uint32_t new_bucket_idx,
