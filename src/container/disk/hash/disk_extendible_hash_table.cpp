@@ -50,11 +50,23 @@ auto DiskExtendibleHashTable<K, V, KC>::Hash(K key) const -> uint32_t {
   return static_cast<uint32_t>(hash_fn_.GetHash(key));
 }
 template <typename K, typename V, typename KC>
-void DiskExtendibleHashTable<K, V, KC>::MigrateEntries(ExtendibleHTableBucketPage<K, V, KC> *old_bucket,
-                                                       ExtendibleHTableBucketPage<K, V, KC> *new_bucket,
-                                                       uint32_t new_bucket_idx, uint32_t local_depth_mask) {
-                                                        
-                                                       }
+void DiskExtendibleHashTable<K, V, KC>::MigrateEntries(ExtendibleHTableBucketPage<K, V, KC> *old_bucket,ExtendibleHTableBucketPage<K, V, KC> *new_bucket,uint32_t new_bucket_idx, uint32_t local_depth_mask) {
+  std::vector<std::pair<K, V>> entries;
+  for (uint32_t i = 0; i < old_bucket->Size(); ++i) {
+    entries.push_back(old_bucket->EntryAt(i));
+  }
+  old_bucket->Clear();
+  for (const auto &entry : entries)
+  {
+    uint32_t h = Hash(entry.first);
+    if ((h & local_depth_mask) == new_bucket_idx) {
+      new_bucket->Insert(entry.first, entry.second, cmp_);
+    } else {
+      old_bucket->Insert(entry.first, entry.second, cmp_);
+    }
+  }
+                                                      
+}
 /*****************************************************************************
  * SEARCH
  *****************************************************************************/
@@ -126,22 +138,42 @@ auto DiskExtendibleHashTable<K, V, KC>::InsertToNewBucket(ExtendibleHTableDirect
   }
   return new_bucket_page->insert(key, value, cmp_);
 }
+// template <typename K, typename V, typename KC>
+// void DiskExtendibleHashTable<K, V, KC>::UpdateDirectoryMapping(ExtendibleHTableDirectoryPage *directory,
+//                                                                uint32_t new_bucket_idx, page_id_t new_bucket_page_id,
+//                                                                uint32_t new_local_depth) {
+//   uint32_t split = (1 << (new_local_depth- 1));
+//   uint32_t mask=split-1;
+//   uint32_t sign=(mask&new_bucket_idx);
+//       for(uint32_t i=0;i<directory->Size();i++){
+//         if((i&mask)==sign){
+//           directory->SetLocalDepth(i, new_local_depth);
+//           if((i&split)!=0){
+//             directory->SetBucketPageId(i, new_bucket_page_id);
+//           }
+//         }
+//       }
+// }
 template <typename K, typename V, typename KC>
-void DiskExtendibleHashTable<K, V, KC>::UpdateDirectoryMapping(ExtendibleHTableDirectoryPage *directory,
-                                                               uint32_t new_bucket_idx, page_id_t new_bucket_page_id,
-                                                               uint32_t new_local_depth) {
-  uint32_t split = (1 << (new_local_depth- 1));
-  uint32_t mask=split-1;
-  uint32_t sign=(mask&new_bucket_idx);
-      for(uint32_t i=0;i<directory->Size();i++){
-        if((i&mask)==sign){
-          directory->SetLocalDepth(i, new_local_depth);
-          if((i&split)!=0){
-            directory->SetBucketPageId(i, new_bucket_page_id);
-          }
-        }
-      }
+void DiskExtendibleHashTable<K, V, KC>::UpdateDirectoryMapping(
+    ExtendibleHTableDirectoryPage *directory,
+    uint32_t new_bucket_idx, 
+    page_id_t new_bucket_page_id,
+    uint32_t new_local_depth,
+    uint32_t local_depth_mask) {
+  uint32_t old_local_depth_mask = local_depth_mask >> 1;
+  uint32_t shared_suffix = new_bucket_idx & old_local_depth_mask;
+  for (uint32_t i = 0; i < directory->Size(); ++i) {
+    if ((i & old_local_depth_mask) == shared_suffix) {
+      directory->SetLocalDepth(i, new_local_depth);
+      if ((i & local_depth_mask) == (new_bucket_idx & local_depth_mask)) {
+        directory->SetBucketPageId(i, new_bucket_page_id);
+      } 
+    }
+  }
 }
+
+
 
 /*****************************************************************************
    * REMOVE
