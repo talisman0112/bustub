@@ -243,8 +243,6 @@ void DiskExtendibleHashTable<K, V, KC>::UpdateDirectoryMapping(
    *****************************************************************************/
 template <typename K, typename V, typename KC>
 auto DiskExtendibleHashTable<K, V, KC>::Remove(const K &key, Transaction *transaction) -> bool {
-  template <typename K, typename V, typename KC>
-auto DiskExtendibleHashTable<K, V, KC>::Remove(const K &key, Transaction *transaction) -> bool {
   uint32_t hash = Hash(key);
 
   // 1. 获取 Directory Page ID (依然是快拿快放 Header 锁)
@@ -320,7 +318,6 @@ auto DiskExtendibleHashTable<K, V, KC>::Remove(const K &key, Transaction *transa
   return true;
 }
 
-}
 
 template class DiskExtendibleHashTable<int, int, IntComparator>;
 template class DiskExtendibleHashTable<GenericKey<4>, RID, GenericComparator<4>>;
