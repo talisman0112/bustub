@@ -92,17 +92,17 @@ auto ExtendibleHTableDirectoryPage::GetLocalDepth(uint32_t bucket_idx) const -> 
  }
 
 void ExtendibleHTableDirectoryPage::SetLocalDepth(uint32_t bucket_idx, uint8_t local_depth) {
-  BUSTUB_ASSERT(bucket_idx < (1 << global_depth_), "bucket_idx out of bounds");
+  BUSTUB_ASSERT(bucket_idx < (1U << global_depth_), "bucket_idx out of bounds");
   local_depths_[bucket_idx] = local_depth;
 }
 
 void ExtendibleHTableDirectoryPage::IncrLocalDepth(uint32_t bucket_idx) {
-  BUSTUB_ASSERT(bucket_idx < (1 << global_depth_), "bucket_idx out of bounds");
+  BUSTUB_ASSERT(bucket_idx < (1U << global_depth_), "bucket_idx out of bounds");
   local_depths_[bucket_idx]++;
 }
 
 void ExtendibleHTableDirectoryPage::DecrLocalDepth(uint32_t bucket_idx) {
-  BUSTUB_ASSERT(bucket_idx < (1 << global_depth_), "bucket_idx out of bounds");
+  BUSTUB_ASSERT(bucket_idx < (1U << global_depth_), "bucket_idx out of bounds");
   if (local_depths_[bucket_idx] > 0) {
     local_depths_[bucket_idx]--;
   }

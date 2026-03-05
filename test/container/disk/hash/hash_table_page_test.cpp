@@ -1,14 +1,14 @@
-//===----------------------------------------------------------------------===//
-//
-//                         BusTub
-//
-// hash_table_page_test.cpp
-//
-// Identification: test/container/hash_table_page_test.cpp
-//
-// Copyright (c) 2015-2021, Carnegie Mellon University Database Group
-//
-//===----------------------------------------------------------------------===//
+// // ===----------------------------------------------------------------------===//
+
+// //                         BusTub
+
+// // hash_table_page_test.cpp
+
+// // Identification: test/container/hash_table_page_test.cpp
+
+// // Copyright (c) 2015-2021, Carnegie Mellon University Database Group
+
+// // ===----------------------------------------------------------------------===//
 
 // #include <thread>  // NOLINT
 // #include <vector>

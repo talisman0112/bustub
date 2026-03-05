@@ -29,7 +29,7 @@
 namespace bustub {
 
 // NOLINTNEXTLINE
-TEST(ExtendibleHTableTest, DISABLED_BucketPageSampleTest) {
+TEST(ExtendibleHTableTest, BucketPageSampleTest) {
   auto disk_mgr = std::make_unique<DiskManagerUnlimitedMemory>();
   auto bpm = std::make_unique<BufferPoolManager>(5, disk_mgr.get());
 

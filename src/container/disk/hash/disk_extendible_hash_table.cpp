@@ -27,7 +27,7 @@
 #include "storage/page/extendible_htable_directory_page.h"
 #include "storage/page/extendible_htable_header_page.h"
 #include "storage/page/page_guard.h"
-#include "disk_extendible_hash_table.h"
+
 
 namespace bustub {
 
@@ -42,6 +42,9 @@ DiskExtendibleHashTable<K, V, KC>::DiskExtendibleHashTable(const std::string &na
       header_max_depth_(header_max_depth),
       directory_max_depth_(directory_max_depth),
       bucket_max_size_(bucket_max_size) {
+  auto header_guard = bpm_->NewPageGuarded(&header_page_id_);
+  auto header_page = header_guard.AsMut<ExtendibleHTableHeaderPage>();
+  header_page->Init(header_max_depth_);
 }
 
 
@@ -55,11 +58,13 @@ void DiskExtendibleHashTable<K, V, KC>::MigrateEntries(ExtendibleHTableBucketPag
   for (uint32_t i = 0; i < old_bucket->Size(); ++i) {
     entries.push_back(old_bucket->EntryAt(i));
   }
-  old_bucket->Clear();
+  for (const auto &entry : entries) {
+    old_bucket->Remove(entry.first, cmp_);
+  }
   for (const auto &entry : entries)
   {
     uint32_t h = Hash(entry.first);
-    if ((h & local_depth_mask) == new_bucket_idx) {
+    if ((h & local_depth_mask) == (new_bucket_idx&local_depth_mask)) {
       new_bucket->Insert(entry.first, entry.second, cmp_);
     } else {
       old_bucket->Insert(entry.first, entry.second, cmp_);
@@ -91,7 +96,7 @@ auto DiskExtendibleHashTable<K, V, KC>::GetValue(const K &key, std::vector<V> *r
   auto bucket_guard=bpm_->FetchPageRead(bucket_page_id);
   auto bucket_page = bucket_guard.As<ExtendibleHTableBucketPage<K, V, KC>>();
   V value;
-  bool find=bucket_page->lookup(key,value,cmp_);
+  bool find=bucket_page->Lookup(key,value,cmp_);
   if (find) {
     result->clear();
     result->push_back(value);
@@ -117,9 +122,8 @@ auto DiskExtendibleHashTable<K, V, KC>::Insert(const K &key, const V &value, Tra
     directory_page_id = header_page->GetDirectoryPageId(directory_idx);
 
     if (directory_page_id == INVALID_PAGE_ID) {
-      // 如果目录不存在，通常在此处创建。但在 BusTub 项目中，Header 预先分配了目录
-      return false; 
-    }
+    return InsertToNewDirectory(header_page, directory_idx, hash, key, value);
+  }
   } // header_guard 在此作用域结束时自动释放
 
   // --- 步骤 2: 锁定 Directory Page ---
@@ -131,8 +135,7 @@ auto DiskExtendibleHashTable<K, V, KC>::Insert(const K &key, const V &value, Tra
     page_id_t bucket_page_id = directory_page->GetBucketPageId(bucket_idx);
 
     if (bucket_page_id == INVALID_PAGE_ID) {
-        // 只有在实现动态创建桶时会进这里
-        return false;
+      return InsertToNewBucket(directory_page, bucket_idx, key, value);
     }
 
     // --- 步骤 3: 锁定 Bucket Page ---
@@ -214,7 +217,7 @@ auto DiskExtendibleHashTable<K, V, KC>::InsertToNewBucket(ExtendibleHTableDirect
     directory->SetBucketPageId(i, new_bucket_page_id);
     directory->SetLocalDepth(i, 0);
   }
-  return new_bucket_page->insert(key, value, cmp_);
+  return new_bucket_page->Insert(key, value, cmp_);
 }
 
 template <typename K, typename V, typename KC>
