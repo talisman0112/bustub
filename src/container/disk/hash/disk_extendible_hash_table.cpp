@@ -156,7 +156,7 @@ auto DiskExtendibleHashTable<K, V, KC>::Insert(const K &key, const V &value, Tra
     // --- 步骤 4: 处理桶溢出 (分裂逻辑) ---
     
     // 检查是否达到最大深度限制 (防止无限分裂)
-    if (directory_page->GetLocalDepth(bucket_idx) >= HTABLE_DIRECTORY_MAX_DEPTH) {
+    if (directory_page->GetLocalDepth(bucket_idx) >= directory_max_depth_) {
       return false; 
     }
 
@@ -191,6 +191,9 @@ auto DiskExtendibleHashTable<K, V, KC>::Insert(const K &key, const V &value, Tra
 template <typename K, typename V, typename KC>
 auto DiskExtendibleHashTable<K, V, KC>::InsertToNewDirectory(ExtendibleHTableHeaderPage *header, uint32_t directory_idx,
                                                              uint32_t hash, const K &key, const V &value) -> bool {
+  if (directory_idx >= header->MaxSize()) {
+    return false;
+  }                                                            
   page_id_t new_directory_page_id = INVALID_PAGE_ID;
   auto new_directory_guard = bpm_->NewPageGuarded(&new_directory_page_id).UpgradeWrite();
   if (new_directory_page_id == INVALID_PAGE_ID) {

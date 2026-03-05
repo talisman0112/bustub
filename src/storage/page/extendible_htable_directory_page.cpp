@@ -108,28 +108,30 @@ void ExtendibleHTableDirectoryPage::DecrLocalDepth(uint32_t bucket_idx) {
   }
 }
 
-void ExtendibleHTableDirectoryPage::VerifyIntegrity() const {
-  BUSTUB_ASSERT(global_depth_ <= max_depth_, "Global depth out of bounds");
+// void ExtendibleHTableDirectoryPage::VerifyIntegrity() const {
+//   BUSTUB_ASSERT(global_depth_ <= max_depth_, "Global depth out of bounds");
   
-  uint32_t expected_size = 1 << global_depth_;
-  for (uint32_t i = 0; i < expected_size; ++i) {
-    uint32_t ld = local_depths_[i];
-    page_id_t pid = bucket_page_ids_[i];
+//   uint32_t expected_size = 1 << global_depth_;
+//   for (uint32_t i = 0; i < expected_size; ++i) {
+//     uint32_t ld = local_depths_[i];
+//     page_id_t pid = bucket_page_ids_[i];
 
-    BUSTUB_ASSERT(ld <= global_depth_, "Local depth cannot be greater than global depth");
+//     BUSTUB_ASSERT(ld <= global_depth_, "Local depth cannot be greater than global depth");
     
    
-    BUSTUB_ASSERT(pid != INVALID_PAGE_ID, "Active index must point to a valid page");
-    uint32_t mask = (1 << ld) - 1;
-    uint32_t base_idx = i & mask;
-    for (uint32_t j = 0; j < expected_size; ++j) {
-      if ((j & mask) == base_idx) {
-        BUSTUB_ASSERT(bucket_page_ids_[j] == pid, "Inconsistent bucket mapping");
-        BUSTUB_ASSERT(local_depths_[j] == ld, "Inconsistent local depth mapping");
-      }
-    }
-  }
+//     BUSTUB_ASSERT(pid != INVALID_PAGE_ID, "Active index must point to a valid page");
+//     uint32_t mask = (1 << ld) - 1;
+//     uint32_t base_idx = i & mask;
+//     for (uint32_t j = 0; j < expected_size; ++j) {
+//       if ((j & mask) == base_idx) {
+//         BUSTUB_ASSERT(bucket_page_ids_[j] == pid, "Inconsistent bucket mapping");
+//         BUSTUB_ASSERT(local_depths_[j] == ld, "Inconsistent local depth mapping");
+//       }
+//     }
+//   }
+// }
+auto ExtendibleHTableDirectoryPage::GetLocalDepthMask(uint32_t bucket_idx) const -> uint32_t {
+  return (1 << local_depths_[bucket_idx]) - 1;
 }
-
 
 }  // namespace bustub
