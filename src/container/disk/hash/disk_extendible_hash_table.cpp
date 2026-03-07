@@ -215,11 +215,8 @@ auto DiskExtendibleHashTable<K, V, KC>::InsertToNewBucket(ExtendibleHTableDirect
   }
   auto *new_bucket_page = new_bucket_guard.AsMut<ExtendibleHTableBucketPage<K, V, KC>>();
   new_bucket_page->Init(bucket_max_size_);
-  uint32_t num_slots = directory->Size(); 
-  for (uint32_t i = 0; i < num_slots; ++i) {
-    directory->SetBucketPageId(i, new_bucket_page_id);
-    directory->SetLocalDepth(i, 0);
-  }
+  directory->SetBucketPageId(bucket_idx, new_bucket_page_id);
+  directory->SetLocalDepth(bucket_idx, directory->GetGlobalDepth());
   return new_bucket_page->Insert(key, value, cmp_);
 }
 
@@ -307,12 +304,7 @@ auto DiskExtendibleHashTable<K, V, KC>::Remove(const K &key, Transaction *transa
               dir_page->DecrLocalDepth(i);
           }
       }
-      
-      // 实际上这里应该删除（Deallocate）那个空桶的页面
-      // bpm_->DeletePage(bucket_page_id); 
-      
-      // 继续尝试向上合并？这需要重新定位新的 bucket 和 split image
-      // 为了通过项目，通常一层合并就足够了。
+      bpm_->DeletePage(bucket_page_id); 
       break; 
   }
 
