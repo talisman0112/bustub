@@ -18,10 +18,43 @@ namespace bustub {
 
 InsertExecutor::InsertExecutor(ExecutorContext *exec_ctx, const InsertPlanNode *plan,
                                std::unique_ptr<AbstractExecutor> &&child_executor)
-    : AbstractExecutor(exec_ctx) {}
+    :AbstractExecutor(exec_ctx), plan_(plan), child_executor_(std::move(child_executor)) {}
 
-void InsertExecutor::Init() { throw NotImplementedException("InsertExecutor is not implemented"); }
+void InsertExecutor::Init() { 
+    child_executor_->Init();
+    executed_ = false;
+ }
 
-auto InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) -> bool { return false; }
+auto InsertExecutor::Next(Tuple *tuple, RID *rid) -> bool { 
+    if (executed_) {
+    return false;
+  }
+  auto *catalog = exec_ctx_->GetCatalog();
+  auto *table_info = catalog->GetTable(plan_->GetTableOid());
+  auto *table_heap = table_info->table_.get();
+  auto indexes = catalog->GetTableIndexes(table_info->name_);
+  int32_t count = 0;
+  Tuple child_tuple;
+  RID child_rid;
+  while (child_executor_->Next(&child_tuple, &child_rid)) {
+    TupleMeta meta{0, false};  
+    auto insert_rid = table_heap->InsertTuple(meta, child_tuple);
+    if (!insert_rid.has_value()) {
+      continue;  
+    }
+    // 更新所有索引
+    for (auto *index_info : indexes) {
+      auto key = child_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_, 
+                                          index_info->index_->GetKeyAttrs());
+      index_info->index_->InsertEntry(key, insert_rid.value(), exec_ctx_->GetTransaction());
+    }
+    count++;
+  }
+  // 返回插入的行数
+  std::vector<Value> values{{TypeId::INTEGER, count}};
+  *tuple = Tuple{values, &GetOutputSchema()};
+  executed_ = true;
+  return true;
+ }
 
 }  // namespace bustub
