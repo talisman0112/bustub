@@ -74,10 +74,48 @@ class SimpleAggregationHashTable {
     for (uint32_t i = 0; i < agg_exprs_.size(); i++) {
       switch (agg_types_[i]) {
         case AggregationType::CountStarAggregate:
+        result->aggregates_[i] = ValueFactory::GetIntegerValue(result->aggregates_[i].GetAs<int32_t>()+input.aggregates_[i].GetAs<int32_t>());
+          break;
         case AggregationType::CountAggregate:
+      if (!input.aggregates_[i].IsNull()) {
+      if (result->aggregates_[i].IsNull()) {
+      result->aggregates_[i] = input.aggregates_[i];
+    } else {
+      result->aggregates_[i] = ValueFactory::GetIntegerValue(result->aggregates_[i].GetAs<int32_t>() + input.aggregates_[i].GetAs<int32_t>());
+    }
+  }
+  break;
         case AggregationType::SumAggregate:
+          if (!input.aggregates_[i].IsNull()) {
+            if (result->aggregates_[i].IsNull()) {
+              result->aggregates_[i] = input.aggregates_[i];
+            } else {
+              result->aggregates_[i] = ValueFactory::GetIntegerValue(
+                  result->aggregates_[i].GetAs<int32_t>() + input.aggregates_[i].GetAs<int32_t>());
+            }
+          }
+          break;
         case AggregationType::MinAggregate:
+          if (!input.aggregates_[i].IsNull()) {
+            if (result->aggregates_[i].IsNull()) {
+              result->aggregates_[i] = input.aggregates_[i];
+            } else {
+              result->aggregates_[i] = input.aggregates_[i].CompareLessThan(result->aggregates_[i]) == CmpBool::CmpTrue
+                                            ? input.aggregates_[i]
+                                            : result->aggregates_[i];
+            }
+          }
+          break;
         case AggregationType::MaxAggregate:
+          if (!input.aggregates_[i].IsNull()) {
+            if (result->aggregates_[i].IsNull()) {
+              result->aggregates_[i] = input.aggregates_[i];
+            } else {
+              result->aggregates_[i] = input.aggregates_[i].CompareGreaterThan(result->aggregates_[i]) == CmpBool::CmpTrue
+                                            ? input.aggregates_[i]
+                                            : result->aggregates_[i];
+            }
+          }
           break;
       }
     }
@@ -188,12 +226,29 @@ class AggregationExecutor : public AbstractExecutor {
 
   /** @return The tuple as an AggregateValue */
   auto MakeAggregateValue(const Tuple *tuple) -> AggregateValue {
-    std::vector<Value> vals;
-    for (const auto &expr : plan_->GetAggregates()) {
-      vals.emplace_back(expr->Evaluate(tuple, child_executor_->GetOutputSchema()));
+  std::vector<Value> vals;
+  const auto &agg_exprs = plan_->GetAggregates();
+  const auto &agg_types = plan_->GetAggregateTypes();
+  
+  for (size_t i = 0; i < agg_exprs.size(); i++) {
+    switch (agg_types[i]) {
+      case AggregationType::CountStarAggregate:
+        vals.emplace_back(ValueFactory::GetIntegerValue(1));
+        break;
+      case AggregationType::CountAggregate:
+        vals.emplace_back(agg_exprs[i]->Evaluate(tuple, child_executor_->GetOutputSchema()).IsNull()
+                            ? ValueFactory::GetNullValueByType(TypeId::INTEGER)
+                            : ValueFactory::GetIntegerValue(1));
+        break;
+      case AggregationType::SumAggregate:
+      case AggregationType::MinAggregate:
+      case AggregationType::MaxAggregate:
+        vals.emplace_back(agg_exprs[i]->Evaluate(tuple, child_executor_->GetOutputSchema()));
+        break;
     }
-    return {vals};
   }
+  return {vals};
+}
 
  private:
   /** The aggregation plan node */
@@ -204,8 +259,9 @@ class AggregationExecutor : public AbstractExecutor {
 
   /** Simple aggregation hash table */
   // TODO(Student): Uncomment SimpleAggregationHashTable aht_;
-
+  SimpleAggregationHashTable aht_{plan_->GetAggregates(), plan_->GetAggregateTypes()};
   /** Simple aggregation hash table iterator */
   // TODO(Student): Uncomment SimpleAggregationHashTable::Iterator aht_iterator_;
+  SimpleAggregationHashTable::Iterator aht_iterator_;
 };
 }  // namespace bustub

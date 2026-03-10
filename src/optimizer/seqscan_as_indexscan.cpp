@@ -1,4 +1,3 @@
-// seqscan_as_indexscan.cpp
 
 #include "optimizer/optimizer.h"
 #include "execution/expressions/column_value_expression.h"
@@ -11,21 +10,21 @@ namespace bustub {
 
 auto Optimizer::OptimizeSeqScanAsIndexScan(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef {
   std::vector<AbstractPlanNodeRef> children;
+  //遍历优化树
   for (const auto &child : plan->GetChildren()) {
     children.emplace_back(OptimizeSeqScanAsIndexScan(child));
   }
   auto optimized_plan = plan->CloneWithChildren(std::move(children));
-
+//是否是 SeqScanPlanNode，如果不是就不优化
   if (optimized_plan->GetType() != PlanType::SeqScan) {
     return optimized_plan;
   }
   const auto &seq_scan = dynamic_cast<const SeqScanPlanNode &>(*optimized_plan);
-
+//是否有 filter_predicate_，如果没有就不优化
   if (seq_scan.filter_predicate_ == nullptr) {
     return optimized_plan;
   }
-
-  // 检查是否是 ComparisonExpression
+  // 检查是否是等值比较，并且一边是 column value expression，另一边是 constant value expression，像v1=v2目前还不支持
   const auto *comp_expr = dynamic_cast<const ComparisonExpression *>(seq_scan.filter_predicate_.get());
   if (comp_expr == nullptr || comp_expr->comp_type_ != ComparisonType::Equal) {
     return optimized_plan;
@@ -33,7 +32,7 @@ auto Optimizer::OptimizeSeqScanAsIndexScan(const AbstractPlanNodeRef &plan) -> A
 
   auto left = comp_expr->GetChildAt(0);
   auto right = comp_expr->GetChildAt(1);
-
+// 提取 col 和 constant
   const ColumnValueExpression *col_expr = nullptr;
   const ConstantValueExpression *const_expr = nullptr;
 
@@ -51,10 +50,9 @@ auto Optimizer::OptimizeSeqScanAsIndexScan(const AbstractPlanNodeRef &plan) -> A
   } else {
     return optimized_plan;
   }
-
+//查找匹配的索引
   auto col_idx = col_expr->GetColIdx();
   auto indexes = catalog_.GetTableIndexes(seq_scan.table_name_);
-  
   for (const auto &index_info : indexes) {
     if (index_info->key_schema_.GetColumnCount() != 1) {
       continue;

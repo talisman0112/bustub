@@ -55,6 +55,17 @@ class NestedLoopJoinExecutor : public AbstractExecutor {
  private:
   /** The NestedLoopJoin plan node to be executed. */
   const NestedLoopJoinPlanNode *plan_;
+  //左右子执行器
+  std::unique_ptr<AbstractExecutor> left_executor_;
+  std::unique_ptr<AbstractExecutor> right_executor_;
+  //左右执行器的 tuple 和 rid
+  Tuple left_tuple_;
+  RID left_rid_;
+  Tuple right_tuple;
+  RID right_rid;
+  //是否有效
+  bool has_left_tuple_{false};  
+  bool left_matched_{false};//是否匹配右表 leftjoin
 };
 
 }  // namespace bustub
