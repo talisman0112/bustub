@@ -90,5 +90,7 @@ class WindowFunctionExecutor : public AbstractExecutor {
 
   /** The child executor from which tuples are obtained */
   std::unique_ptr<AbstractExecutor> child_executor_;
+  std::vector<std::vector<Value>> results_;
+  std::vector<std::vector<Value>>::iterator result_iter_;
 };
 }  // namespace bustub
