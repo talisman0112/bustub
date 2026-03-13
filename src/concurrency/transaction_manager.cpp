@@ -91,7 +91,7 @@ void TransactionManager::Abort(Transaction *txn) {
       if (!undo_link.has_value() || !undo_link->IsValid()) {
         // INSERT
         meta.is_deleted_ = true;
-        meta.ts_ = txn->GetTransactionId();
+        meta.ts_ = txn->GetTransactionId(); 
         table_heap->UpdateTupleMeta(meta, rid);
         continue;
       }

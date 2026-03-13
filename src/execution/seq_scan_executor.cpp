@@ -25,21 +25,32 @@ void SeqScanExecutor::Init() {
 
 auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool { 
   while (!table_iterator_->IsEnd()) {
-    auto [meta, fetched_tuple] = table_iterator_->GetTuple();
-    auto current_rid = table_iterator_->GetRID();
-    ++(*table_iterator_);
-    if (meta.is_deleted_) {
-      continue;
-    }
-    if (plan_->filter_predicate_ != nullptr) {
-      auto value = plan_->filter_predicate_->Evaluate(&fetched_tuple, table_info_->schema_);
-      if (!value.GetAs<bool>()) {
-        continue;
+  RID cur_rid=table_iterator_->GetRID();
+  auto [meta, base_tuple] = table_iterator_->GetTuple();
+  auto txn=exec_ctx_->GetTransaction();
+  auto readts=txn->GetReadTs();
+  auto txnid=txn->GetTransactionId();
+  bool is_directly_visible = false;
+  if(meta.ts_==txnid){
+    is_directly_visible=!meta.is_deleted_;
+  }
+  else if(meta.ts_<=readts){
+    is_directly_visible=!meta.is_deleted_;
+  }
+  else{
+    is_directly_visible=false;
+  }
+  if (meta.ts_ == txnid || meta.ts_ <= readts) {
+        if (!meta.is_deleted_) {
+            *tuple = base_tuple;
+            *rid = cur_rid;
+            ++(*table_iterator_);
+            return true;
+        }
       }
+    else {
+        
     }
-    *tuple = fetched_tuple;
-    *rid = current_rid;
-    return true;
   }
   return false;   
 }
