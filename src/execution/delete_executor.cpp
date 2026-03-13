@@ -35,11 +35,12 @@ auto DeleteExecutor::Next( Tuple *tuple, RID *rid) -> bool {
   auto *table_info = catalog->GetTable(plan_->GetTableOid());
   auto *table_heap = table_info->table_.get();
   auto indexes = catalog->GetTableIndexes(table_info->name_);
-  TupleMeta meta{INVALID_TXN_ID, true};
     int32_t count = 0;
     Tuple child_tuple;
     RID child_rid;
     while (child_executor_->Next(&child_tuple, &child_rid)) {
+    auto meta = table_heap->GetTupleMeta(child_rid);
+    meta.is_deleted_ = true;
     table_heap->UpdateTupleMeta(meta, child_rid);
     // 更新所有索引
     for (auto *index_info : indexes) {

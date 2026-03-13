@@ -40,7 +40,6 @@ void HashJoinExecutor::Init() {
       key_values.push_back(expr->Evaluate(&tuple, right_executor_->GetOutputSchema()));
     }
     
-    // ✅ 用 AggregateKey 包装多个 Value
     CompositeKey key{key_values};
     hash_table_[key].push_back(tuple);
   }
@@ -78,7 +77,7 @@ auto HashJoinExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     
     auto it = hash_table_.find(key);
     if (it != hash_table_.end() && !it->second.empty()) {
-      current_matches_ = it->second;  // ✅ 拷贝整个 vector
+      current_matches_ = it->second;  
     } else if (plan_->GetJoinType() == JoinType::LEFT) {
       std::vector<Value> values;
       for (uint32_t i = 0; i < left_executor_->GetOutputSchema().GetColumnCount(); i++) {

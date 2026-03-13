@@ -50,7 +50,7 @@ auto NestedLoopJoinExecutor::Next(Tuple *tuple, RID *rid) -> bool {
                                                     &right_tuple, right_executor_->GetOutputSchema());
       if (!value.IsNull() && value.GetAs<bool>()) {
         left_matched_ = true;
-        // 构造输出：左表列 + 右表列
+        // 左右遍历
         std::vector<Value> values;
         for (uint32_t i = 0; i < left_executor_->GetOutputSchema().GetColumnCount(); i++) {
           values.emplace_back(left_tuple_.GetValue(&left_executor_->GetOutputSchema(), i));
@@ -63,7 +63,7 @@ auto NestedLoopJoinExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       }
     }
 
-    // 4处理 LEFT JOIN
+    // 处理 LEFT JOIN
     if (plan_->GetJoinType() == JoinType::LEFT && !left_matched_) {
       std::vector<Value> values;
       for (uint32_t i = 0; i < left_executor_->GetOutputSchema().GetColumnCount(); i++) {

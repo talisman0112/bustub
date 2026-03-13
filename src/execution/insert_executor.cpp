@@ -42,7 +42,6 @@ auto InsertExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     if (!insert_rid.has_value()) {
       continue;  
     }
-    // 更新所有索引
     for (auto *index_info : indexes) {
       auto key = child_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_, 
                                           index_info->index_->GetKeyAttrs());

@@ -5,15 +5,26 @@
 namespace bustub {
 
 auto Watermark::AddTxn(timestamp_t read_ts) -> void {
-  if (read_ts < commit_ts_) {
-    throw Exception("read ts < commit ts");
+  if (read_ts <commit_ts_) {
+    throw Exception("read ts <commit ts");
   }
-
-  // TODO(fall2023): implement me!
+  current_reads_[read_ts]++;
+  if(read_ts>=watermark_){
+    return ;
+  }
+  watermark_=read_ts;
 }
 
-auto Watermark::RemoveTxn(timestamp_t read_ts) -> void {
-  // TODO(fall2023): implement me!
+void Watermark::RemoveTxn(timestamp_t read_ts) {
+  auto it = current_reads_.find(read_ts);
+  if (it == current_reads_.end()) {
+    return;
+  }
+  if (--it->second == 0) {
+    current_reads_.erase(it);
+    watermark_ = current_reads_.empty() ? commit_ts_ : current_reads_.begin()->first;
+  }
 }
+
 
 }  // namespace bustub

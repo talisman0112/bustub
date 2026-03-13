@@ -41,7 +41,7 @@ struct CompositeKey {
   }
 };
 
-// ✅ 定义 Hasher
+//  定义 Hasher
 struct CompositeKeyHasher {
   auto operator()(const CompositeKey &key) const -> std::size_t {
     std::size_t hash = 0;
@@ -66,7 +66,7 @@ class HashJoinExecutor : public AbstractExecutor {
   const HashJoinPlanNode *plan_;
   std::unique_ptr<AbstractExecutor> left_executor_;
   std::unique_ptr<AbstractExecutor> right_executor_;
-  // ✅ 用 CompositeKey 替换 AggregateKey
+  // 用 CompositeKey 替换 AggregateKey
   std::unordered_map<CompositeKey, std::vector<Tuple>, CompositeKeyHasher> hash_table_;
   std::vector<Tuple> current_matches_;
   Tuple left_tuple_;
