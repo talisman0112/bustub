@@ -143,56 +143,85 @@ void TransactionManager::Abort(Transaction *txn) {
 
 
 void TransactionManager::GarbageCollection() {
-  // 1. 获取 watermark
-  timestamp_t watermark = running_txns_.GetWatermark();
-
-  // 2. 收集所有还被需要的 txn_id
+  timestamp_t watermark = GetWatermark();
+  
   std::unordered_set<txn_id_t> active_txn_ids;
-
-  // 3. 遍历所有表的所有 tuple
+  std::vector<std::tuple<txn_id_t, int, UndoLog>> logs_to_truncate;
+  
+  // 需要直接清空 version link 的 RID
+  std::vector<std::pair<RID, VersionUndoLink>> links_to_clear;
+  
   auto table_names = catalog_->GetTableNames();
   for (const auto &table_name : table_names) {
     auto table_info = catalog_->GetTable(table_name);
     auto &table_heap = table_info->table_;
-
+    
     for (auto iter = table_heap->MakeIterator(); !iter.IsEnd(); ++iter) {
       auto rid = iter.GetRID();
-
-      // 获取 version chain 头
+      auto [meta, tuple] = iter.GetTuple();
+      
       auto version_link = GetVersionLink(rid);
-      if (!version_link.has_value()) {
+      if (!version_link.has_value() || !version_link->prev_.IsValid()) {
         continue;
       }
-
+      
+      // 关键：检查 heap tuple 的 ts
+      if (meta.ts_ < watermark) {
+        // heap tuple 本身就 < watermark，整个 undo chain 都可以清理
+        // 直接把 version link 的 prev 设为 invalid
+        VersionUndoLink new_link = *version_link;
+        new_link.prev_ = UndoLink{};
+        links_to_clear.emplace_back(rid, new_link);
+        continue;
+      }
+      
+      // heap tuple ts >= watermark，需要遍历 undo chain
       auto undo_link = version_link->prev_;
-      bool found_visible_version = false;
-
-      // 遍历 version chain
+      bool found_first_below_watermark = false;
+      
       while (undo_link.IsValid()) {
-        // 直接获取 UndoLog，不是 optional
         UndoLog undo_log = GetUndoLog(undo_link);
-
-        if (undo_log.ts_ > watermark) {
-          // 还有活跃事务可能需要这个版本
-          active_txn_ids.insert(undo_link.prev_txn_);
-        } else {
-          // ts <= watermark
-          if (!found_visible_version) {
-            // 第一个 <= watermark 的版本，保留
+        
+        if (undo_log.ts_ < watermark) {
+          if (!found_first_below_watermark) {
+            found_first_below_watermark = true;
             active_txn_ids.insert(undo_link.prev_txn_);
-            found_visible_version = true;
+            
+            if (undo_log.prev_version_.IsValid()) {
+              UndoLog truncated_log = undo_log;
+              truncated_log.prev_version_ = UndoLink{};
+              logs_to_truncate.emplace_back(undo_link.prev_txn_, undo_link.prev_log_idx_, truncated_log);
+            }
+            break;
           }
-          // 更老的版本不需要了
+        } else {
+          active_txn_ids.insert(undo_link.prev_txn_);
         }
-
+        
         undo_link = undo_log.prev_version_;
       }
     }
   }
-
-  // 4. 清理不再需要的事务
+  
+  // 清空需要清理的 version link
+  for (const auto &[rid, new_link] : links_to_clear) {
+    UpdateVersionLink(rid, new_link);
+  }
+  
+  // 执行截断操作
+  {
+    std::shared_lock<std::shared_mutex> lck(txn_map_mutex_);
+    for (const auto &[txn_id, log_idx, truncated_log] : logs_to_truncate) {
+      auto it = txn_map_.find(txn_id);
+      if (it != txn_map_.end()) {
+        it->second->ModifyUndoLog(log_idx, truncated_log);
+      }
+    }
+  }
+  
+  // 清理不再需要的事务
   std::unique_lock<std::shared_mutex> lck(txn_map_mutex_);
-
+  
   std::vector<txn_id_t> txns_to_remove;
   for (const auto &[txn_id, txn] : txn_map_) {
     auto state = txn->GetTransactionState();
@@ -202,10 +231,9 @@ void TransactionManager::GarbageCollection() {
       }
     }
   }
-
+  
   for (auto txn_id : txns_to_remove) {
     txn_map_.erase(txn_id);
   }
 }
-
 }  // namespace bustub
