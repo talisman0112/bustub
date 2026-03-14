@@ -50,7 +50,7 @@ auto TransactionManager::VerifyTxn(Transaction *txn) -> bool { return true; }
 
 auto TransactionManager::Commit(Transaction *txn) -> bool {
   std::unique_lock<std::mutex> commit_lck(commit_mutex_);
-  // TODO(fall2023): acquire commit ts!
+
   if (txn->state_ != TransactionState::RUNNING) {
     throw Exception("txn not in running state");
   }
@@ -62,14 +62,40 @@ auto TransactionManager::Commit(Transaction *txn) -> bool {
       return false;
     }
   }
-  // TODO(fall2023): Implement the commit logic!
-  std::unique_lock<std::shared_mutex> lck(txn_map_mutex_);
-  // TODO(fall2023): set commit timestamp + update last committed timestamp here.
-  txn->state_ = TransactionState::COMMITTED;
+
+  // 1. 获取 commit timestamp
   auto commit_ts = ++last_commit_ts_;
-  txn->commit_ts_=commit_ts;
-  running_txns_.UpdateCommitTs(txn->commit_ts_);
+
+  // 2. 遍历 write set，更新所有修改过的 tuple 的 ts
+  for (const auto &[table_oid, rid_set] : txn->GetWriteSets()) {
+    auto table_info = catalog_->GetTable(table_oid);
+    
+    for (const auto &rid : rid_set) {
+      // 更新 tuple meta 的 ts
+      auto meta = table_info->table_->GetTupleMeta(rid);
+      if (meta.ts_ == txn->GetTransactionTempTs()) {
+        meta.ts_ = commit_ts;
+        table_info->table_->UpdateTupleMeta(meta, rid);
+      }
+
+      // 清除 version link 的 in_progress 标志
+      auto version_link = GetVersionLink(rid);
+      if (version_link.has_value()) {
+        version_link->in_progress_ = false;
+        UpdateVersionLink(rid, version_link);
+      }
+    }
+  }
+
+  // 3. 设置事务状态和 commit ts
+  txn->commit_ts_ = commit_ts;
+  txn->state_ = TransactionState::COMMITTED;
+
+  // 4. 更新 running_txns
+  std::unique_lock<std::shared_mutex> lck(txn_map_mutex_);
+  running_txns_.UpdateCommitTs(commit_ts);
   running_txns_.RemoveTxn(txn->read_ts_);
+
   return true;
 }
 
@@ -116,6 +142,70 @@ void TransactionManager::Abort(Transaction *txn) {
 }
 
 
-void TransactionManager::GarbageCollection() { UNIMPLEMENTED("not implemented"); }
+void TransactionManager::GarbageCollection() {
+  // 1. 获取 watermark
+  timestamp_t watermark = running_txns_.GetWatermark();
+
+  // 2. 收集所有还被需要的 txn_id
+  std::unordered_set<txn_id_t> active_txn_ids;
+
+  // 3. 遍历所有表的所有 tuple
+  auto table_names = catalog_->GetTableNames();
+  for (const auto &table_name : table_names) {
+    auto table_info = catalog_->GetTable(table_name);
+    auto &table_heap = table_info->table_;
+
+    for (auto iter = table_heap->MakeIterator(); !iter.IsEnd(); ++iter) {
+      auto rid = iter.GetRID();
+
+      // 获取 version chain 头
+      auto version_link = GetVersionLink(rid);
+      if (!version_link.has_value()) {
+        continue;
+      }
+
+      auto undo_link = version_link->prev_;
+      bool found_visible_version = false;
+
+      // 遍历 version chain
+      while (undo_link.IsValid()) {
+        // 直接获取 UndoLog，不是 optional
+        UndoLog undo_log = GetUndoLog(undo_link);
+
+        if (undo_log.ts_ > watermark) {
+          // 还有活跃事务可能需要这个版本
+          active_txn_ids.insert(undo_link.prev_txn_);
+        } else {
+          // ts <= watermark
+          if (!found_visible_version) {
+            // 第一个 <= watermark 的版本，保留
+            active_txn_ids.insert(undo_link.prev_txn_);
+            found_visible_version = true;
+          }
+          // 更老的版本不需要了
+        }
+
+        undo_link = undo_log.prev_version_;
+      }
+    }
+  }
+
+  // 4. 清理不再需要的事务
+  std::unique_lock<std::shared_mutex> lck(txn_map_mutex_);
+
+  std::vector<txn_id_t> txns_to_remove;
+  for (const auto &[txn_id, txn] : txn_map_) {
+    auto state = txn->GetTransactionState();
+    if (state == TransactionState::COMMITTED || state == TransactionState::ABORTED) {
+      if (active_txn_ids.find(txn_id) == active_txn_ids.end()) {
+        txns_to_remove.push_back(txn_id);
+      }
+    }
+  }
+
+  for (auto txn_id : txns_to_remove) {
+    txn_map_.erase(txn_id);
+  }
+}
 
 }  // namespace bustub
