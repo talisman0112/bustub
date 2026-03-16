@@ -165,10 +165,9 @@ void TransactionManager::GarbageCollection() {
         continue;
       }
       
-      // 关键：检查 heap tuple 的 ts
+      // 检查 heap tuple 的 ts
       if (meta.ts_ < watermark) {
         // heap tuple 本身就 < watermark，整个 undo chain 都可以清理
-        // 直接把 version link 的 prev 设为 invalid
         VersionUndoLink new_link = *version_link;
         new_link.prev_ = UndoLink{};
         links_to_clear.emplace_back(rid, new_link);

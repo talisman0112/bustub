@@ -75,7 +75,7 @@ auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
 
     // 如果找到了可见的 tuple，应用 filter
     if (result_tuple.has_value()) {
-      // ⭐ 关键：应用 filter predicate
+      //  关键：应用 filter predicate
       if (plan_->filter_predicate_ != nullptr) {
         auto value = plan_->filter_predicate_->Evaluate(&(*result_tuple), *schema);
         if (value.IsNull() || !value.GetAs<bool>()) {
