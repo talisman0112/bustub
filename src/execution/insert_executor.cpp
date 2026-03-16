@@ -61,12 +61,6 @@ auto InsertExecutor::Next(Tuple *tuple, RID *rid) -> bool {
 
       for (const auto &existing_rid : result) {
         auto [existing_meta, existing_tuple] = table_heap->GetTuple(existing_rid);
-        LOG_DEBUG("rid=%s ts=%d temp_ts=%d deleted=%d read_ts=%d",
-          existing_rid.ToString().c_str(),
-          (int)existing_meta.ts_,
-          (int)txn->GetTransactionTempTs(),
-          existing_meta.is_deleted_,
-          (int)txn->GetReadTs());
         // 已删除的跳过
         if (existing_meta.is_deleted_) {
           continue;
