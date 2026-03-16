@@ -36,13 +36,17 @@ auto IndexScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     while (iter_ != rids_.end()) {
         RID cur_rid = *iter_;
         ++iter_; 
+        if (seen_rids_.count(cur_rid) > 0) {
+            continue;  
+        }
+        seen_rids_.insert(cur_rid);
         auto [meta, current_tuple] = table_info_->table_->GetTuple(cur_rid);
         bool is_visible=false;
         if(meta.ts_==txn->GetTransactionTempTs()||meta.ts_<=txn->GetReadTs()){
          is_visible=true;
         }
         if(is_visible){
-            if(meta.is_deleted_){
+            if(!meta.is_deleted_){
             *tuple = std::move(current_tuple);
             *rid=cur_rid;
             return true;

@@ -48,5 +48,6 @@ class IndexScanExecutor : public AbstractExecutor {
   TableInfo *table_info_;           
   std::vector<RID> rids_;           
   std::vector<RID>::iterator iter_; // 当前遍历位置
+  std::unordered_set<RID> seen_rids_;//检测重复id
 };
 }  // namespace bustub

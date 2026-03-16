@@ -48,6 +48,7 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   int32_t count = 0;
   
   while (child_executor_->Next(&child_tuple, &child_rid)) {
+    fmt::println(stderr, "UpdateExecutor: processing rid={}", child_rid.ToString());
     auto old_meta = table_heap->GetTupleMeta(child_rid);
     auto old_tuple = table_heap->GetTuple(child_rid).second;
     
@@ -55,7 +56,7 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     std::vector<Value> new_values;
     new_values.reserve(plan_->target_expressions_.size());
     for (const auto &expr : plan_->target_expressions_) {
-      new_values.push_back(expr->Evaluate(&child_tuple, child_executor_->GetOutputSchema()));
+      new_values.push_back(expr->Evaluate(&old_tuple, table_info->schema_));
     }
     Tuple new_tuple(new_values, &table_info->schema_);
     
@@ -129,7 +130,7 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       throw ExecutionException("Write-write conflict: committed after my read_ts");
       
     } else {
-      // Case 4: 第一次修改这行 → 创建新的 undo log
+      // Case 4: 
       std::vector<bool> modified_fields(column_count, false);
       std::vector<Value> undo_values;
       std::vector<Column> undo_columns;
@@ -148,7 +149,11 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       auto version_link = txn_mgr->GetVersionLink(child_rid);
       UndoLink prev_undo_link;
       if (version_link.has_value()) {
-        prev_undo_link = version_link->prev_;
+        if(version_link->in_progress_){
+        txn->SetTainted();
+        throw ExecutionException("Write-write conflict: in_progress");
+        }
+        prev_undo_link = version_link->prev_; 
       }
       
       // 创建 undo log
@@ -166,9 +171,16 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       
       // 更新 version link
       VersionUndoLink new_version_link;
-      new_version_link.prev_ = new_undo_link;
-      new_version_link.in_progress_ = true;
-      txn_mgr->UpdateVersionLink(child_rid, new_version_link);
+    new_version_link.prev_ = new_undo_link;
+    new_version_link.in_progress_ = true;
+    bool success = txn_mgr->UpdateVersionLink(child_rid, new_version_link,
+    [](std::optional<VersionUndoLink> old) {
+        return !old.has_value() || !old->in_progress_;
+    });
+    if (!success) {
+    txn->SetTainted();
+    throw ExecutionException("Write-write conflict: in_progress");
+    }
       
       txn->AppendWriteSet(table_oid, child_rid);
     }
@@ -176,21 +188,38 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     // 更新 table heap
     TupleMeta new_meta{txn->GetTransactionTempTs(), false};
     table_heap->UpdateTupleInPlace(new_meta, new_tuple, child_rid, nullptr);
-    
+    auto current_link = txn_mgr->GetVersionLink(child_rid);
+    if (current_link.has_value()) {
+    VersionUndoLink cleared_link = *current_link;
+    cleared_link.in_progress_ = false;
+    txn_mgr->UpdateVersionLink(child_rid, cleared_link, nullptr);  // 无条件更新
+    }
     // 更新索引
     for (auto *index_info : indexes) {
-      auto old_key = old_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_,
-                                            index_info->index_->GetKeyAttrs());
-      index_info->index_->DeleteEntry(old_key, child_rid, txn);
-      
-      auto new_key = new_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_,
-                                            index_info->index_->GetKeyAttrs());
-      index_info->index_->InsertEntry(new_key, child_rid, txn);
+    auto old_key = old_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_,
+                                          index_info->index_->GetKeyAttrs());
+    auto new_key = new_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_,
+                                          index_info->index_->GetKeyAttrs());
+    
+    // 检查 key 是否变了
+    bool key_changed = false;
+    for (uint32_t i = 0; i < index_info->key_schema_.GetColumnCount(); i++) {
+        if (!old_key.GetValue(&index_info->key_schema_, i)
+                .CompareExactlyEquals(new_key.GetValue(&index_info->key_schema_, i))) {
+            key_changed = true;
+            break;
+        }
     }
+    
+    if (key_changed) {
+        // 只插入新 key，不删旧 key
+        index_info->index_->InsertEntry(new_key, child_rid, txn);
+    }
+}
     
     count++;
   }
-  
+  fmt::println(stderr, "UpdateExecutor: total count={}", count);
   std::vector<Value> values{Value(TypeId::INTEGER, count)};
   *tuple = Tuple(values, &GetOutputSchema());
   is_updated_ = true;

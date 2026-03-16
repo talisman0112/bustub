@@ -53,8 +53,17 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
 
   // Case 1: 自己本事务写的
   if (old_meta.ts_ == txn->GetTransactionTempTs()) {
-    TupleMeta new_meta{txn->GetTransactionTempTs(), true};
-    table_heap->UpdateTupleMeta(new_meta, child_rid);
+    for (auto *index_info : indexes) {
+    auto key = old_tuple.KeyFromTuple(
+    table_info->schema_,           // 表的 schema
+    index_info->key_schema_,       // 索引的 key schema
+    index_info->index_->GetKeyAttrs()  // 索引包含哪些列
+  );
+    index_info->index_->DeleteEntry(key, child_rid, txn);
+  }
+  // 更新 meta
+  TupleMeta new_meta{txn->GetTransactionTempTs(), true};
+  table_heap->UpdateTupleMeta(new_meta, child_rid);
   } 
   // Case 2: 别的未提交事务写的
   else if (old_meta.ts_ > TXN_START_ID) {
@@ -69,6 +78,10 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   // Case 4: 正常删除
   else {
     auto version_link = txn_mgr->GetVersionLink(child_rid);
+    if(version_link.has_value()&&version_link->in_progress_){
+      txn->SetTainted();
+      throw ExecutionException("Write-write conflict");
+    }
     UndoLink prev_undo_link;
     if (version_link.has_value()) {
       prev_undo_link = version_link->prev_;
@@ -85,22 +98,28 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
 
     auto new_undo_link = txn->AppendUndoLog(undo_log);
 
-    VersionUndoLink new_version_link;
-    new_version_link.prev_ = new_undo_link;
-    new_version_link.in_progress_ = true;
-    txn_mgr->UpdateVersionLink(child_rid, new_version_link);
-
+    VersionUndoLink new_link;
+    new_link.in_progress_ = true;
+    new_link.prev_ = new_undo_link;
+    bool success = txn_mgr->UpdateVersionLink(child_rid, new_link, 
+    [](std::optional<VersionUndoLink> old) {
+        return !old.has_value() || !old->in_progress_;
+    });
+    if (!success) {
+    txn->SetTainted();
+    throw ExecutionException("Write-write conflict");
+    }
     TupleMeta new_meta{txn->GetTransactionTempTs(), true};
     table_heap->UpdateTupleMeta(new_meta, child_rid);
     txn->AppendWriteSet(table_oid, child_rid);
   }
 
   // 删除索引
-  for (auto *index_info : indexes) {
-    auto key = child_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_,
-                                        index_info->index_->GetKeyAttrs());
-    index_info->index_->DeleteEntry(key, child_rid, txn);
-  }
+  // for (auto *index_info : indexes) {
+  //   auto key = child_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_,
+  //                                       index_info->index_->GetKeyAttrs());
+  //   index_info->index_->DeleteEntry(key, child_rid, txn);
+  // }
 
   count++;
 }
