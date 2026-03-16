@@ -48,6 +48,7 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   RID child_rid;
 
  while (child_executor_->Next(&child_tuple, &child_rid)) {
+  
   auto old_meta = table_heap->GetTupleMeta(child_rid);
   auto old_tuple = table_heap->GetTuple(child_rid).second;
 

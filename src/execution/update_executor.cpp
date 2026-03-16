@@ -48,6 +48,7 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   int32_t count = 0;
   
   while (child_executor_->Next(&child_tuple, &child_rid)) {
+    
     fmt::println(stderr, "UpdateExecutor: processing rid={}", child_rid.ToString());
     auto old_meta = table_heap->GetTupleMeta(child_rid);
     auto old_tuple = table_heap->GetTuple(child_rid).second;
