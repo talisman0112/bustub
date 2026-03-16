@@ -56,7 +56,7 @@ auto UpdateExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     std::vector<Value> new_values;
     new_values.reserve(plan_->target_expressions_.size());
     for (const auto &expr : plan_->target_expressions_) {
-      new_values.push_back(expr->Evaluate(&old_tuple, table_info->schema_));
+      new_values.push_back(expr->Evaluate(&child_tuple, child_executor_->GetOutputSchema()));
     }
     Tuple new_tuple(new_values, &table_info->schema_);
     

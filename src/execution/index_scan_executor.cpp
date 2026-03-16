@@ -27,12 +27,13 @@ void IndexScanExecutor::Init() {
         hash_index->ScanKey(key_tuple, &rids_, exec_ctx_->GetTransaction());
     }
     iter_ = rids_.begin();
+    seen_rids_.clear();
 }
 
 auto IndexScanExecutor::Next(Tuple *tuple, RID *rid) -> bool { 
     auto txn=exec_ctx_->GetTransaction();
     auto txn_mgr = exec_ctx_->GetTransactionManager();
-    const auto *schema = &GetOutputSchema();
+    const auto *schema = &table_info_->schema_;
     while (iter_ != rids_.end()) {
         RID cur_rid = *iter_;
         ++iter_; 

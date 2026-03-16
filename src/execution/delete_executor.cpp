@@ -53,15 +53,15 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
 
   // Case 1: 自己本事务写的
   if (old_meta.ts_ == txn->GetTransactionTempTs()) {
-    for (auto *index_info : indexes) {
-    auto key = old_tuple.KeyFromTuple(
-    table_info->schema_,           // 表的 schema
-    index_info->key_schema_,       // 索引的 key schema
-    index_info->index_->GetKeyAttrs()  // 索引包含哪些列
-  );
-    index_info->index_->DeleteEntry(key, child_rid, txn);
-  }
-  // 更新 meta
+  //   for (auto *index_info : indexes) {
+  //   auto key = old_tuple.KeyFromTuple(
+  //   table_info->schema_,           // 表的 schema
+  //   index_info->key_schema_,       // 索引的 key schema
+  //   index_info->index_->GetKeyAttrs()  // 索引包含哪些列
+  // );
+  //   index_info->index_->DeleteEntry(key, child_rid, txn);
+  // }
+  // // 更新 meta
   TupleMeta new_meta{txn->GetTransactionTempTs(), true};
   table_heap->UpdateTupleMeta(new_meta, child_rid);
   } 
@@ -112,6 +112,12 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     TupleMeta new_meta{txn->GetTransactionTempTs(), true};
     table_heap->UpdateTupleMeta(new_meta, child_rid);
     txn->AppendWriteSet(table_oid, child_rid);
+    auto cur_link = txn_mgr->GetVersionLink(child_rid);
+    if (cur_link.has_value()) {
+    VersionUndoLink cleared = *cur_link;
+    cleared.in_progress_ = false;
+    txn_mgr->UpdateVersionLink(child_rid, cleared, nullptr);
+  }
   }
 
   // 删除索引

@@ -23,6 +23,7 @@ InsertExecutor::InsertExecutor(ExecutorContext *exec_ctx, const InsertPlanNode *
 void InsertExecutor::Init() { 
     child_executor_->Init();
     executed_ = false;
+    
  }
 
 auto InsertExecutor::Next(Tuple *tuple, RID *rid) -> bool {
@@ -62,8 +63,13 @@ auto InsertExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       for (const auto &existing_rid : result) {
         auto [existing_meta, existing_tuple] = table_heap->GetTuple(existing_rid);
         // 已删除的跳过
-        if (existing_meta.is_deleted_) {
-          continue;
+        if (existing_meta.is_deleted_ && existing_meta.ts_ == txn->GetTransactionTempTs()) {
+        continue;
+      }
+    
+      // 已提交的删除，且对我可见，可以重用
+        if (existing_meta.is_deleted_ && existing_meta.ts_ <= txn->GetReadTs()) {
+        continue;
         }
 
         // 未提交的其他事务 → write-write conflict
