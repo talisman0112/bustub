@@ -28,7 +28,6 @@ auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   auto txn = exec_ctx_->GetTransaction();
   auto txn_mgr = exec_ctx_->GetTransactionManager();
   auto read_ts = txn->GetReadTs();
-  auto txn_temp_ts = txn->GetTransactionTempTs();
   const auto *schema = &GetOutputSchema();
 
   while (!table_iterator_->IsEnd()) {
@@ -39,7 +38,7 @@ auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     std::optional<Tuple> result_tuple;
 
     // Case 1: 当前事务自己写的
-    if (meta.ts_ == txn_temp_ts) {
+    if (meta.ts_ == txn->GetTransactionTempTs()) {
       if (meta.is_deleted_) {
         continue;
       }
