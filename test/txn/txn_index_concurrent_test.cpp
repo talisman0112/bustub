@@ -5,6 +5,7 @@
 #include <random>
 #include <string>
 #include <thread>  // NOLINT
+#include <fstream>
 #include "common/bustub_instance.h"
 #include "common/macros.h"
 #include "concurrency/transaction.h"
@@ -15,6 +16,27 @@
 namespace bustub {
 
 // NOLINTBEGIN(bugprone-unchecked-optional-access)
+
+// #region agent log
+namespace {
+inline void BustubDebugLog(const char *location, const char *run_id, const char *hypothesis_id, const std::string &message,
+                           const std::string &data_json) {
+  try {
+    std::ofstream out("debug-0d0b08.log", std::ios::app);
+    if (!out.is_open()) {
+      return;
+    }
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    out << "{\"sessionId\":\"0d0b08\",\"timestamp\":" << ts << ",\"location\":\"" << location << "\",\"runId\":\""
+        << run_id << "\",\"hypothesisId\":\"" << hypothesis_id << "\",\"message\":\"" << message << "\",\"data\":"
+        << (data_json.empty() ? "{}" : data_json) << "}\n";
+  } catch (...) {
+  }
+}
+}  // namespace
+// #endregion agent log
 
 TEST(TxnIndexTest, IndexConcurrentInsertTest) {  // NOLINT
   const auto generate_sql = [](int thread_id, int n) -> std::string {
@@ -150,6 +172,24 @@ TEST(TxnIndexTest, IndexConcurrentUpdateTest) {  // NOLINT
           if (add_delete_insert) {
             StringVectorWriter data_writer;
             BUSTUB_ENSURE(bustub->ExecuteSqlTxn(generate_select_sql(i), data_writer, txn), "cannot retrieve data");
+            if (data_writer.values_.size() != 1) {
+              // #region agent log
+              try {
+                std::string row0 =
+                    data_writer.values_.size() >= 1 ? fmt::format("{}", fmt::join(data_writer.values_[0], ", ")) : "";
+                std::string row1 =
+                    data_writer.values_.size() >= 2 ? fmt::format("{}", fmt::join(data_writer.values_[1], ", ")) : "";
+                BustubDebugLog(
+                    "txn_index_concurrent_test.cpp:add_delete_insert:select_multirow", "pre-fix", "H8",
+                    "SELECT b returned != 1 row inside txn",
+                    std::string("{\"thread\":") + std::to_string(thread) + ",\"txn_ptr\":\"" +
+                        std::to_string(reinterpret_cast<uintptr_t>(txn)) + "\",\"a\":" + std::to_string(i) +
+                        ",\"rows\":" + std::to_string(data_writer.values_.size()) + ",\"row0\":\"" + row0 +
+                        "\",\"row1\":\"" + row1 + "\"}");
+              } catch (...) {
+              }
+              // #endregion agent log
+            }
             BUSTUB_ENSURE(data_writer.values_.size() == 1, "more than 1 row fetched??");
             const auto b_val = std::stoi(data_writer.values_[0][0]);
             BUSTUB_ENSURE(bustub->ExecuteSqlTxn(generate_delete_sql(i), data_writer, txn), "cannot delete data");

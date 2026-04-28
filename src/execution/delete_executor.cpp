@@ -11,6 +11,9 @@
 //===----------------------------------------------------------------------===//
 
 #include <memory>
+#include <chrono>
+#include <fstream>
+#include <string>
 
 #include "execution/executors/delete_executor.h"
 #include "catalog/catalog.h"
@@ -19,6 +22,27 @@
 #include "storage/table/table_heap.h"
 #include "type/value.h"
 namespace bustub {
+
+// #region agent log
+namespace {
+inline void BustubDebugLog(const char *location, const char *run_id, const char *hypothesis_id, const std::string &message,
+                           const std::string &data_json) {
+  try {
+    std::ofstream out("debug-0d0b08.log", std::ios::app);
+    if (!out.is_open()) {
+      return;
+    }
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    out << "{\"sessionId\":\"0d0b08\",\"timestamp\":" << ts << ",\"location\":\"" << location << "\",\"runId\":\""
+        << run_id << "\",\"hypothesisId\":\"" << hypothesis_id << "\",\"message\":\"" << message << "\",\"data\":"
+        << (data_json.empty() ? "{}" : data_json) << "}\n";
+  } catch (...) {
+  }
+}
+}  // namespace
+// #endregion agent log
 
 DeleteExecutor::DeleteExecutor(ExecutorContext *exec_ctx, const DeletePlanNode *plan,
                                std::unique_ptr<AbstractExecutor> &&child_executor)
@@ -51,20 +75,19 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
   
   auto old_meta = table_heap->GetTupleMeta(child_rid);
   auto old_tuple = table_heap->GetTuple(child_rid).second;
+  // #region agent log
+  BustubDebugLog("delete_executor.cpp:Next:begin_rid", "pre-fix", "H1",
+                 "Begin deleting rid",
+                 std::string("{\"rid_page\":") + std::to_string(child_rid.GetPageId()) + ",\"rid_slot\":" +
+                     std::to_string(child_rid.GetSlotNum()) + ",\"old_ts\":" + std::to_string(old_meta.ts_) +
+                     ",\"read_ts\":" + std::to_string(txn->GetReadTs()) + "}");
+  // #endregion agent log
 
   // Case 1: 自己本事务写的
   if (old_meta.ts_ == txn->GetTransactionTempTs()) {
-  //   for (auto *index_info : indexes) {
-  //   auto key = old_tuple.KeyFromTuple(
-  //   table_info->schema_,           // 表的 schema
-  //   index_info->key_schema_,       // 索引的 key schema
-  //   index_info->index_->GetKeyAttrs()  // 索引包含哪些列
-  // );
-  //   index_info->index_->DeleteEntry(key, child_rid, txn);
-  // }
-  // // 更新 meta
-  TupleMeta new_meta{txn->GetTransactionTempTs(), true};
-  table_heap->UpdateTupleMeta(new_meta, child_rid);
+    // MVCC: do not physically delete index entries here.
+    TupleMeta new_meta{txn->GetTransactionTempTs(), true};
+    table_heap->UpdateTupleMeta(new_meta, child_rid);
   } 
   // Case 2: 别的未提交事务写的
   else if (old_meta.ts_ > TXN_START_ID) {
@@ -113,20 +136,15 @@ auto DeleteExecutor::Next(Tuple *tuple, RID *rid) -> bool {
     TupleMeta new_meta{txn->GetTransactionTempTs(), true};
     table_heap->UpdateTupleMeta(new_meta, child_rid);
     txn->AppendWriteSet(table_oid, child_rid);
-    auto cur_link = txn_mgr->GetVersionLink(child_rid);
-    if (cur_link.has_value()) {
-    VersionUndoLink cleared = *cur_link;
-    cleared.in_progress_ = false;
-    txn_mgr->UpdateVersionLink(child_rid, cleared, nullptr);
-  }
   }
 
-  // 删除索引
-  // for (auto *index_info : indexes) {
-  //   auto key = child_tuple.KeyFromTuple(table_info->schema_, index_info->key_schema_,
-  //                                       index_info->index_->GetKeyAttrs());
-  //   index_info->index_->DeleteEntry(key, child_rid, txn);
-  // }
+  // MVCC: do not physically delete index entries on delete.
+  // #region agent log
+  BustubDebugLog("delete_executor.cpp:Next:index_delete_skipped", "pre-fix", "H11",
+                 "Skipped deleting index entries for MVCC delete",
+                 std::string("{\"rid_page\":") + std::to_string(child_rid.GetPageId()) + ",\"rid_slot\":" +
+                     std::to_string(child_rid.GetSlotNum()) + ",\"indexes\":" + std::to_string(indexes.size()) + "}");
+  // #endregion agent log
 
   count++;
 }

@@ -11,9 +11,33 @@
 //===----------------------------------------------------------------------===//
 
 #include "execution/executors/seq_scan_executor.h"
+#include <chrono>
+#include <fstream>
+#include <string>
 #include "concurrency/transaction_manager.h"
 #include "execution/execution_common.h"
 namespace bustub {
+
+// #region agent log
+namespace {
+inline void BustubDebugLog(const char *location, const char *run_id, const char *hypothesis_id, const std::string &message,
+                           const std::string &data_json) {
+  try {
+    std::ofstream out("debug-0d0b08.log", std::ios::app);
+    if (!out.is_open()) {
+      return;
+    }
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    out << "{\"sessionId\":\"0d0b08\",\"timestamp\":" << ts << ",\"location\":\"" << location << "\",\"runId\":\""
+        << run_id << "\",\"hypothesisId\":\"" << hypothesis_id << "\",\"message\":\"" << message << "\",\"data\":"
+        << (data_json.empty() ? "{}" : data_json) << "}\n";
+  } catch (...) {
+  }
+}
+}  // namespace
+// #endregion agent log
 
 SeqScanExecutor::SeqScanExecutor(ExecutorContext *exec_ctx, const SeqScanPlanNode *plan)
     : AbstractExecutor(exec_ctx), plan_(plan) {}
@@ -84,6 +108,17 @@ auto SeqScanExecutor::Next(Tuple *tuple, RID *rid) -> bool {
       
       *tuple = *result_tuple;
       *rid = cur_rid;
+      // #region agent log
+      try {
+        auto k0 = tuple->GetValue(*schema, 0).ToString();
+        BustubDebugLog("seq_scan_executor.cpp:Next:emit", "pre-fix", "H6",
+                       "Emitting visible tuple from seq scan",
+                       std::string("{\"rid_page\":") + std::to_string(cur_rid.GetPageId()) + ",\"rid_slot\":" +
+                           std::to_string(cur_rid.GetSlotNum()) + ",\"ts\":" + std::to_string(meta.ts_) +
+                           ",\"k0\":\"" + k0 + "\"}");
+      } catch (...) {
+      }
+      // #endregion agent log
       return true;
     }
   }

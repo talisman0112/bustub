@@ -13,6 +13,7 @@
 #include <string>
 #include <thread>  // NOLINT
 #include <vector>
+#include <fstream>
 
 #include "buffer/buffer_pool_manager.h"
 #include "catalog/catalog.h"
@@ -37,6 +38,27 @@
 #include "type/value_factory.h"
 
 namespace bustub {
+
+// #region agent log
+namespace {
+inline void BustubDebugLog(const char *location, const char *run_id, const char *hypothesis_id, const std::string &message,
+                           const std::string &data_json) {
+  try {
+    std::ofstream out("debug-0d0b08.log", std::ios::app);
+    if (!out.is_open()) {
+      return;
+    }
+    const auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    out << "{\"sessionId\":\"0d0b08\",\"timestamp\":" << ts << ",\"location\":\"" << location << "\",\"runId\":\""
+        << run_id << "\",\"hypothesisId\":\"" << hypothesis_id << "\",\"message\":\"" << message << "\",\"data\":"
+        << (data_json.empty() ? "{}" : data_json) << "}\n";
+  } catch (...) {
+  }
+}
+}  // namespace
+// #endregion agent log
 
 auto Int(uint32_t data) -> Value { return ValueFactory::GetIntegerValue(data); }
 
@@ -486,6 +508,20 @@ void QueryIndex(BustubInstance &instance, const std::string &txn_var_name, Trans
       }
     } else {
       if (writer.values_.size() != 1) {
+        // #region agent log
+        try {
+          std::string row0 = writer.values_.size() >= 1 ? fmt::format("{}", fmt::join(writer.values_[0], ", ")) : "";
+          std::string row1 = writer.values_.size() >= 2 ? fmt::format("{}", fmt::join(writer.values_[1], ", ")) : "";
+          std::string row2 = writer.values_.size() >= 3 ? fmt::format("{}", fmt::join(writer.values_[2], ", ")) : "";
+          BustubDebugLog("txn_common.h:QueryIndex:multirow", "pre-fix", "H7",
+                         "QueryIndex expected 1 row but got multiple",
+                         std::string("{\"pk_column\":\"") + pk_column + "\",\"pk_value\":\"" +
+                             fmt::format("{}", expected_pk[i]) + "\",\"rows\":" + std::to_string(writer.values_.size()) +
+                             ",\"query\":\"" + query + "\",\"row0\":\"" + row0 + "\",\"row1\":\"" + row1 +
+                             "\",\"row2\":\"" + row2 + "\"}");
+        } catch (...) {
+        }
+        // #endregion agent log
         fmt::println(stderr, "{} expect {} = {} to have 1 row, found {} rows", StatusFail("ERROR:"), pk_column,
                      expected_pk[i], writer.values_.size());
         std::terminate();

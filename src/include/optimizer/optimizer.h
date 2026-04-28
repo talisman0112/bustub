@@ -99,6 +99,12 @@ class Optimizer {
   auto OptimizeSortLimitAsTopN(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef;
 
   /**
+   * @brief push down filter conditions to hash join
+   * Extract join keys from filter predicate and push remaining filter conditions below hash join
+   */
+  auto OptimizePushDownFilterToHashJoin(const AbstractPlanNodeRef &plan) -> AbstractPlanNodeRef;
+
+  /**
    * @brief get the estimated cardinality for a table based on the table name. Useful when join reordering. BusTub
    * doesn't support statistics for now, so it's the only way for you to get the table size :(
    *

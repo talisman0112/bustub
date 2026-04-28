@@ -17,6 +17,8 @@
 #include <memory>
 #include <mutex>  // NOLINT
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include "buffer/lru_k_replacer.h"
 #include "common/config.h"
 #include "recovery/log_manager.h"
@@ -190,8 +192,21 @@ class BufferPoolManager {
   std::unique_ptr<LRUKReplacer> replacer_;
   /** List of free frames that don't have any pages on them. */
   std::list<frame_id_t> free_list_;
-  /** This latch protects shared data structures. We recommend updating this comment to describe what it protects. */
+  /**
+   * Global lock order:
+   *   latch_ (directory metadata) -> frame_latches_[fid] -> replacer_ internal latch -> Page::rwlatch_
+   *
+   * Rules:
+   *   1) Never block on disk IO while holding latch_ or frame_latches_[fid].
+   *   2) If multiple frame latches are needed, acquire in ascending frame id order.
+   */
+  /** Directory-level metadata latch for page_table_, free_list_, pending_fetches_, in_flight_flush_. */
   std::mutex latch_;
+  /** Per-frame latches for frame-local state and page data snapshotting during flush/evict. */
+  std::vector<std::mutex> frame_latches_;
+  /** Pages with an async flush in flight after eviction; FetchPage must wait before reading that page_id from disk. */
+  std::unordered_set<page_id_t> in_flight_flush_;
+  std::condition_variable flush_inflight_cv_;
   std::unordered_map<page_id_t, std::shared_ptr<std::condition_variable>> pending_fetches_;
   std::atomic<uint64_t> hit_count_{0};
   std::atomic<uint64_t> miss_count_{0};
